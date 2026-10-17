@@ -12,17 +12,7 @@
  * reason — which login name is taken), and the create form repeats a field error beside the
  * field it names. The dialogs are this panel's private surface; the page orchestrates refresh.
  */
-import {
-  ElButton,
-  ElDialog,
-  ElForm,
-  ElFormItem,
-  ElInput,
-  ElMessage,
-  ElOption,
-  ElSelect,
-  ElTag,
-} from 'element-plus'
+import { NButton, NForm, NInput, NModal, NSelect, NTag, useMessage } from 'naive-ui'
 import { computed, ref } from 'vue'
 
 import {
@@ -37,7 +27,10 @@ import {
   type RoleView,
   type UserView,
 } from '@/api/controlPlane'
+import FieldRow from '@/components/FieldRow.vue'
 import { useSessionStore } from '@/session/store'
+
+const message = useMessage()
 
 // Kept in step with the backend's `MINIMUM_PASSWORD_LENGTH`. Checked here so the form can refuse
 // before a round trip; the backend refuses too, and its answer is the authority.
@@ -106,7 +99,7 @@ async function submitUser(): Promise<void> {
   }
   if (await attempt(() => createUser({ ...userDraft.value }))) {
     userDialog.value = false
-    ElMessage.success('账户已创建')
+    message.success('账户已创建')
     emit('changed')
   }
 }
@@ -159,7 +152,7 @@ async function submitReset(): Promise<void> {
   }
   if (await attempt(() => resetUserPassword(target.id, newPassword.value))) {
     passwordDialog.value = false
-    ElMessage.success('密码已重置')
+    message.success('密码已重置')
   }
 }
 
@@ -176,9 +169,7 @@ async function toggleStatus(user: UserView): Promise<void> {
     // Saying how many sessions were closed is the point: an administrator deactivating an account
     // needs to know the operator standing at a terminal has been signed out, not just that a field
     // changed.
-    ElMessage.success(
-      next === 'deactivated' ? `已停用，同时下线 ${revoked} 个会话` : '已恢复该账户',
-    )
+    message.success(next === 'deactivated' ? `已停用，同时下线 ${revoked} 个会话` : '已恢复该账户')
     emit('changed')
   }
 }
@@ -209,7 +200,7 @@ async function submitRoles(): Promise<void> {
 
 async function removeUser(user: UserView): Promise<void> {
   if (await attempt(() => deleteUser(user.id))) {
-    ElMessage.success('账户已删除')
+    message.success('账户已删除')
     emit('changed')
   }
 }
@@ -218,7 +209,7 @@ async function removeUser(user: UserView): Promise<void> {
 <template>
   <div class="panel">
     <div class="panel__actions">
-      <ElButton v-if="mayEditUsers" type="primary" @click="openUserDialog">新建账户</ElButton>
+      <NButton v-if="mayEditUsers" type="primary" @click="openUserDialog">新建账户</NButton>
     </div>
 
     <p v-if="failure" class="panel__failure" role="alert">{{ failure }}</p>
@@ -243,9 +234,9 @@ async function removeUser(user: UserView): Promise<void> {
           <td>{{ user.display_name }}</td>
           <td>
             <!-- The word as well as the colour: 停用 is legible without seeing the tag's hue. -->
-            <ElTag :type="user.status === 'active' ? 'success' : 'info'" disable-transitions>
+            <NTag :type="user.status === 'active' ? 'success' : 'info'" disable-transitions>
               {{ user.status === 'active' ? '在用' : '已停用' }}
-            </ElTag>
+            </NTag>
           </td>
           <td>
             <span v-if="user.role_ids.length === 0" class="panel__none">无</span>
@@ -255,95 +246,138 @@ async function removeUser(user: UserView): Promise<void> {
           </td>
           <td class="panel__row-actions">
             <template v-if="mayEditUsers">
-              <ElButton link type="primary" @click="openRename(user)">改名</ElButton>
-              <ElButton link type="primary" @click="openReset(user)">重置密码</ElButton>
-              <ElButton v-if="mayAssignRoles" link type="primary" @click="openRoles(user)">
+              <NButton link type="primary" @click="openRename(user)">改名</NButton>
+              <NButton link type="primary" @click="openReset(user)">重置密码</NButton>
+              <NButton v-if="mayAssignRoles" link type="primary" @click="openRoles(user)">
                 分配角色
-              </ElButton>
-              <ElButton link type="primary" @click="toggleStatus(user)">
+              </NButton>
+              <NButton link type="primary" @click="toggleStatus(user)">
                 {{ user.status === 'active' ? '停用' : '恢复' }}
-              </ElButton>
+              </NButton>
             </template>
-            <ElButton v-if="mayDeleteUsers" link type="danger" @click="removeUser(user)">
+            <NButton v-if="mayDeleteUsers" link type="error" @click="removeUser(user)">
               删除
-            </ElButton>
+            </NButton>
           </td>
         </tr>
       </tbody>
     </table>
 
-    <ElDialog v-model="userDialog" title="新建账户" width="30rem">
-      <ElForm label-width="6rem" @submit.prevent="submitUser">
-        <ElFormItem label="登录名">
-          <ElInput v-model="userDraft.login_name" name="login_name" autocomplete="off" />
-          <p v-if="fieldError('login_name')" class="panel__field-error" role="alert">
-            {{ fieldError('login_name') }}
-          </p>
-        </ElFormItem>
-        <ElFormItem label="姓名">
-          <ElInput v-model="userDraft.display_name" name="display_name" autocomplete="off" />
-          <p v-if="fieldError('display_name')" class="panel__field-error" role="alert">
-            {{ fieldError('display_name') }}
-          </p>
-        </ElFormItem>
-        <ElFormItem label="初始密码">
-          <ElInput
-            v-model="userDraft.password"
-            name="password"
-            type="password"
-            autocomplete="new-password"
-            show-password
-          />
-          <p v-if="fieldError('password')" class="panel__field-error" role="alert">
-            {{ fieldError('password') }}
-          </p>
-        </ElFormItem>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="userDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitUser">创建</ElButton>
+    <NModal v-model:show="userDialog" preset="dialog" title="新建账户" :style="{ width: '30rem' }">
+      <NForm label-width="6rem" @submit.prevent="submitUser">
+        <FieldRow label="登录名">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="userDraft.login_name"
+              :input-props="{ id, name: 'login_name', autocomplete: 'off' }"
+            />
+            <p v-if="fieldError('login_name')" class="panel__field-error" role="alert">
+              {{ fieldError('login_name') }}
+            </p>
+          </template>
+        </FieldRow>
+        <FieldRow label="姓名">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="userDraft.display_name"
+              :input-props="{ id, name: 'display_name', autocomplete: 'off' }"
+            />
+            <p v-if="fieldError('display_name')" class="panel__field-error" role="alert">
+              {{ fieldError('display_name') }}
+            </p>
+          </template>
+        </FieldRow>
+        <FieldRow label="初始密码">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="userDraft.password"
+              show-password-on="click"
+              :input-props="{
+                id,
+                name: 'password',
+                type: 'password',
+                autocomplete: 'new-password',
+              }"
+            />
+            <p v-if="fieldError('password')" class="panel__field-error" role="alert">
+              {{ fieldError('password') }}
+            </p>
+          </template>
+        </FieldRow>
+      </NForm>
+      <template #action>
+        <NButton @click="userDialog = false">取消</NButton>
+        <NButton type="primary" @click="submitUser">创建</NButton>
       </template>
-    </ElDialog>
+    </NModal>
 
-    <ElDialog v-model="renameDialog" title="修改姓名" width="26rem">
-      <ElForm label-width="5rem" @submit.prevent="submitRename">
-        <ElFormItem label="姓名">
-          <ElInput v-model="newDisplayName" name="display_name" autocomplete="off" />
-        </ElFormItem>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="renameDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitRename">保存</ElButton>
+    <NModal
+      v-model:show="renameDialog"
+      preset="dialog"
+      title="修改姓名"
+      :style="{ width: '26rem' }"
+    >
+      <NForm label-width="5rem" @submit.prevent="submitRename">
+        <FieldRow label="姓名">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="newDisplayName"
+              :input-props="{ id, name: 'display_name', autocomplete: 'off' }"
+            />
+          </template>
+        </FieldRow>
+      </NForm>
+      <template #action>
+        <NButton @click="renameDialog = false">取消</NButton>
+        <NButton type="primary" @click="submitRename">保存</NButton>
       </template>
-    </ElDialog>
+    </NModal>
 
-    <ElDialog v-model="passwordDialog" title="重置密码" width="26rem">
-      <ElForm label-width="5rem" @submit.prevent="submitReset">
-        <ElFormItem label="新密码">
-          <ElInput
-            v-model="newPassword"
-            name="new_password"
-            type="password"
-            autocomplete="new-password"
-            show-password
-          />
-        </ElFormItem>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="passwordDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitReset">重置</ElButton>
+    <NModal
+      v-model:show="passwordDialog"
+      preset="dialog"
+      title="重置密码"
+      :style="{ width: '26rem' }"
+    >
+      <NForm label-width="5rem" @submit.prevent="submitReset">
+        <FieldRow label="新密码">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="newPassword"
+              show-password-on="click"
+              :input-props="{
+                id,
+                name: 'new_password',
+                type: 'password',
+                autocomplete: 'new-password',
+              }"
+            />
+          </template>
+        </FieldRow>
+      </NForm>
+      <template #action>
+        <NButton @click="passwordDialog = false">取消</NButton>
+        <NButton type="primary" @click="submitReset">重置</NButton>
       </template>
-    </ElDialog>
+    </NModal>
 
-    <ElDialog v-model="rolesDialog" title="分配角色" width="28rem">
-      <ElSelect v-model="assignedRoleIds" multiple placeholder="选择角色" class="panel__select">
-        <ElOption v-for="role in roles" :key="role.id" :label="role.name" :value="role.id" />
-      </ElSelect>
-      <template #footer>
-        <ElButton @click="rolesDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitRoles">保存</ElButton>
+    <NModal v-model:show="rolesDialog" preset="dialog" title="分配角色" :style="{ width: '28rem' }">
+      <NSelect
+        v-model:value="assignedRoleIds"
+        multiple
+        placeholder="选择角色"
+        aria-label="角色"
+        class="panel__select"
+        :options="roles"
+        label-field="name"
+        value-field="id"
+        :node-props="() => ({ role: 'option' })"
+      />
+      <template #action>
+        <NButton @click="rolesDialog = false">取消</NButton>
+        <NButton type="primary" @click="submitRoles">保存</NButton>
       </template>
-    </ElDialog>
+    </NModal>
   </div>
 </template>
 
@@ -355,15 +389,15 @@ async function removeUser(user: UserView): Promise<void> {
 .panel__failure {
   margin: 0 0 1rem;
   padding: 0.6rem 0.9rem;
-  border-left: 3px solid var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .panel__field-error {
   margin: 0.25rem 0 0;
   width: 100%;
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .panel__table {
@@ -373,14 +407,14 @@ async function removeUser(user: UserView): Promise<void> {
 
 .panel__caption {
   margin-bottom: 0.5rem;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
   text-align: left;
 }
 
 .panel__table th,
 .panel__table td {
   padding: 0.55rem 0.75rem;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--color-border-light);
   text-align: left;
   vertical-align: middle;
 }
@@ -393,7 +427,7 @@ async function removeUser(user: UserView): Promise<void> {
 
 .panel__none,
 .panel__loading {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .panel__select {
@@ -401,7 +435,7 @@ async function removeUser(user: UserView): Promise<void> {
 }
 
 .panel :focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 </style>

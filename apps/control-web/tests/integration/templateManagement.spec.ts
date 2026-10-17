@@ -1,11 +1,11 @@
-import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 
 import { ControlPlaneError } from '@/api/controlPlane'
 import TemplateManagement from '@/modules/templates/TemplateManagement.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const api = vi.hoisted(() => ({
   readTemplateDrafts: vi.fn(),
@@ -116,7 +116,7 @@ function grant(...permissions: string[]) {
   }
 }
 
-async function chooseFile(wrapper: ReturnType<typeof mount>, file: File): Promise<void> {
+async function chooseFile(wrapper: ReturnType<typeof mountWithNaive>, file: File): Promise<void> {
   const input = wrapper.find('input[type="file"]')
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
   await input.trigger('change')
@@ -137,7 +137,7 @@ describe('SOP 模板工作台', () => {
   it('loads drafts and import history for a viewer without showing edit controls', async () => {
     grant('template.draft.view')
 
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     expect(api.readTemplateDrafts).toHaveBeenCalledOnce()
@@ -157,7 +157,7 @@ describe('SOP 模板工作台', () => {
       value: createObjectUrl,
     })
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     await wrapper
@@ -174,7 +174,7 @@ describe('SOP 模板工作台', () => {
   it('imports a selected workbook and leaves secret-like controls out of the workbench', async () => {
     grant('template.draft.view', 'template.draft.edit')
     api.importTemplateDraft.mockResolvedValue({ import_record: IMPORT, draft: DRAFT })
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     const file = new File(['synthetic workbook'], '现场模板.xlsx', {
@@ -198,7 +198,7 @@ describe('SOP 模板工作台', () => {
         fieldErrors: [{ field: '步骤表[3].步骤描述', message: '必须符合基座动作编码格式' }],
       }),
     )
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     const file = new File(['bad workbook'], '错误模板.xlsx', { type: 'application/octet-stream' })
@@ -211,7 +211,7 @@ describe('SOP 模板工作台', () => {
 
   it('publishes a draft and shows the immutable version history', async () => {
     grant('template.draft.view', 'template.draft.edit')
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     await wrapper
@@ -262,7 +262,7 @@ describe('SOP 模板工作台', () => {
       total: 1,
     })
 
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     expect(wrapper.text()).toContain('开始：动作（未知编号）')
@@ -287,7 +287,7 @@ describe('SOP 模板工作台', () => {
       const click = vi
         .spyOn(HTMLAnchorElement.prototype, 'click')
         .mockImplementation(() => undefined)
-      const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+      const wrapper = mountWithNaive(TemplateManagement)
       await flushPromises()
 
       await wrapper
@@ -309,7 +309,7 @@ describe('SOP 模板工作台', () => {
 
   it('saves explicitly declared boundary fields with a draft', async () => {
     grant('template.draft.view', 'template.draft.edit')
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     await wrapper
@@ -349,7 +349,7 @@ describe('SOP 模板工作台', () => {
         fieldErrors: [{ field: '草稿.start_signal', message: '必须声明开始信号' }],
       }),
     )
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     await wrapper
@@ -369,7 +369,7 @@ describe('SOP 模板工作台', () => {
   it('edits a draft with the revision it read', async () => {
     grant('template.draft.view', 'template.draft.edit')
     api.editTemplateDraft.mockResolvedValue({ ...DRAFT, revision: 4 })
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     await wrapper
@@ -407,7 +407,7 @@ describe('SOP 模板工作台', () => {
         status: 409,
       }),
     )
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     await wrapper
@@ -424,7 +424,7 @@ describe('SOP 模板工作台', () => {
   it('does not list resources for an edit-only caller and offers known-id editing', async () => {
     grant('template.draft.edit')
 
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     expect(api.readTemplateDrafts).not.toHaveBeenCalled()
@@ -442,7 +442,7 @@ describe('SOP 模板工作台', () => {
       total: 1,
     })
 
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     expect(wrapper.text()).toContain('未知顺序声明（future_ordering）')

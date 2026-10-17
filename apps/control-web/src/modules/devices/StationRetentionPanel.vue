@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElButton, ElForm, ElFormItem, ElInput, ElMessage, ElOption, ElSelect } from 'element-plus'
+import { NButton, NForm, NInput, NSelect, useMessage } from 'naive-ui'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import {
@@ -18,7 +18,10 @@ import {
   type StationRetention,
   type StationView,
 } from '@/api/controlPlane'
+import FieldRow from '@/components/FieldRow.vue'
 import { useSessionStore } from '@/session/store'
+
+const message = useMessage()
 
 const props = defineProps<{ stations: StationView[] }>()
 const session = useSessionStore()
@@ -246,7 +249,7 @@ async function confirmGlobalSave(): Promise<void> {
     writeDraft(globalDraft, updated.policy)
     editingGlobal.value = false
     globalEstimate.value = null
-    ElMessage.success('全局默认保留组已保存')
+    message.success('全局默认保留组已保存')
     await load()
   } catch (error) {
     recordFailure(error)
@@ -300,7 +303,7 @@ async function confirmStationSave(): Promise<void> {
     stationMode.value = updated.mode
     writeDraft(stationDraft, updated.overrides ?? updated.default)
     stationEstimate.value = null
-    ElMessage.success('工位保留组已保存')
+    message.success('工位保留组已保存')
   } catch (error) {
     recordFailure(error)
     stationEstimate.value = null
@@ -342,27 +345,28 @@ onMounted(() => {
           全局默认整组生效；工位要么整组跟随全局，要么整组自定义。录像滚动窗口按推理机配置，不在此处。
         </p>
       </div>
-      <ElSelect
+      <NSelect
         v-if="props.stations.length > 0"
-        v-model="selectedStationId"
+        v-model:value="selectedStationId"
         aria-label="选择工位"
         placeholder="选择工位"
         class="retention__station"
-      >
-        <ElOption
-          v-for="station in props.stations"
-          :key="station.id"
-          :label="`${station.name}（${station.code}）`"
-          :value="station.id"
-        />
-      </ElSelect>
-      <ElForm v-else class="retention__station" @submit.prevent="selectKnownStation">
-        <ElFormItem label="已知工位 ID">
-          <ElInput v-model="knownStationId" aria-label="工位 ID" />
-        </ElFormItem>
-        <ElButton :loading="loading" @click="selectKnownStation">读取工位保留组</ElButton>
+        :options="
+          props.stations.map((station) => ({
+            label: `${station.name}（${station.code}）`,
+            value: station.id,
+          }))
+        "
+      />
+      <NForm v-else class="retention__station" @submit.prevent="selectKnownStation">
+        <FieldRow label="已知工位 ID">
+          <template #default="{ id }">
+            <NInput v-model:value="knownStationId" :input-props="{ id, 'aria-label': '工位 ID' }" />
+          </template>
+        </FieldRow>
+        <NButton :loading="loading" @click="selectKnownStation">读取工位保留组</NButton>
         <p class="retention__note">没有工位列表权限时，可按已知 ID 操作；不会读取设备列表。</p>
-      </ElForm>
+      </NForm>
     </header>
 
     <p v-if="failure" class="retention__failure" role="alert">{{ failure }}</p>
@@ -385,9 +389,9 @@ onMounted(() => {
               <dd>{{ describe(globalPolicy.policy[field.key]) }}</dd>
             </template>
           </dl>
-          <ElButton v-if="mayEdit" type="primary" link @click="editingGlobal = !editingGlobal">
+          <NButton v-if="mayEdit" type="primary" link @click="editingGlobal = !editingGlobal">
             {{ editingGlobal ? '收起全局编辑' : '编辑全局默认' }}
-          </ElButton>
+          </NButton>
         </section>
 
         <section :aria-label="`工位 ${stationName} 的覆盖与生效组`">
@@ -411,48 +415,49 @@ onMounted(() => {
         </section>
       </div>
 
-      <ElForm
+      <NForm
         v-if="mayEdit"
-        label-position="top"
+        label-placement="top"
         class="retention__form"
         aria-label="保存保留组"
         @submit.prevent="requestStationEstimate"
       >
-        <ElFormItem label="工位保留来源">
-          <ElSelect v-model="stationMode" aria-label="工位保留来源" class="retention__select">
-            <ElOption label="整组跟随全局默认" value="follow_global" />
-            <ElOption label="整组自定义" value="custom" />
-          </ElSelect>
-        </ElFormItem>
+        <FieldRow label="工位保留来源">
+          <template #default="{ id }">
+            <select :id="id" v-model="stationMode" class="retention__select">
+              <option value="follow_global">整组跟随全局默认</option>
+              <option value="custom">整组自定义</option>
+            </select>
+          </template>
+        </FieldRow>
         <p v-if="fieldError('retention_policy')" class="retention__failure" role="alert">
           {{ fieldError('retention_policy') }}
         </p>
         <div v-if="stationMode === 'custom'" class="retention__rules-form">
-          <ElFormItem v-for="field in FIELDS" :key="`station-${field.key}`" :label="field.label">
-            <div class="retention__rule">
-              <ElSelect
-                v-model="stationDraft[field.key].mode"
-                :aria-label="`${field.label} 保留方式`"
-              >
-                <ElOption
-                  v-for="mode in RULE_MODES"
-                  :key="mode.value"
-                  :label="mode.label"
-                  :value="mode.value"
+          <FieldRow v-for="field in FIELDS" :key="`station-${field.key}`" :label="field.label">
+            <template #default="{ id }">
+              <div class="retention__rule">
+                <select
+                  :id="id"
+                  v-model="stationDraft[field.key].mode"
+                  :aria-label="`${field.label} 保留方式`"
+                >
+                  <option v-for="mode in RULE_MODES" :key="mode.value" :value="mode.value">
+                    {{ mode.label }}
+                  </option>
+                </select>
+                <NInput
+                  v-if="stationDraft[field.key].mode === 'duration'"
+                  v-model:value="stationDraft[field.key].seconds"
+                  placeholder="秒"
+                  :input-props="{ 'aria-label': `${field.label} 秒数`, inputmode: 'numeric' }"
                 />
-              </ElSelect>
-              <ElInput
-                v-if="stationDraft[field.key].mode === 'duration'"
-                v-model="stationDraft[field.key].seconds"
-                :aria-label="`${field.label} 秒数`"
-                inputmode="numeric"
-                placeholder="秒"
-              />
-            </div>
-            <p v-if="fieldError(field.key)" class="retention__failure" role="alert">
-              {{ fieldError(field.key) }}
-            </p>
-          </ElFormItem>
+              </div>
+              <p v-if="fieldError(field.key)" class="retention__failure" role="alert">
+                {{ fieldError(field.key) }}
+              </p>
+            </template>
+          </FieldRow>
         </div>
         <div v-if="stationEstimate" class="retention__impact" aria-label="工位保留影响估算">
           <h4>即将缩短的影响</h4>
@@ -500,55 +505,54 @@ onMounted(() => {
               </p>
             </li>
           </ul>
-          <ElButton
+          <NButton
             type="primary"
             :loading="saving"
             :disabled="!stationEstimate.complete"
             @click="confirmStationSave"
           >
             确认保存工位保留组
-          </ElButton>
-          <ElButton @click="cancelStationEstimate">取消</ElButton>
+          </NButton>
+          <NButton @click="cancelStationEstimate">取消</NButton>
         </div>
-        <ElButton v-else type="primary" :loading="estimating" @click="requestStationEstimate">
+        <NButton v-else type="primary" :loading="estimating" @click="requestStationEstimate">
           查看影响估算
-        </ElButton>
-      </ElForm>
+        </NButton>
+      </NForm>
 
-      <ElForm
+      <NForm
         v-if="mayEdit && editingGlobal"
-        label-position="top"
+        label-placement="top"
         class="retention__form"
         aria-label="保存全局默认保留组"
         @submit.prevent="requestGlobalEstimate"
       >
         <div class="retention__rules-form">
-          <ElFormItem
+          <FieldRow
             v-for="field in FIELDS"
             :key="`global-${field.key}`"
             :label="`全局 ${field.label}`"
           >
-            <div class="retention__rule">
-              <ElSelect
-                v-model="globalDraft[field.key].mode"
-                :aria-label="`全局 ${field.label} 保留方式`"
-              >
-                <ElOption
-                  v-for="mode in RULE_MODES"
-                  :key="mode.value"
-                  :label="mode.label"
-                  :value="mode.value"
+            <template #default="{ id }">
+              <div class="retention__rule">
+                <select
+                  :id="id"
+                  v-model="globalDraft[field.key].mode"
+                  :aria-label="`全局 ${field.label} 保留方式`"
+                >
+                  <option v-for="mode in RULE_MODES" :key="mode.value" :value="mode.value">
+                    {{ mode.label }}
+                  </option>
+                </select>
+                <NInput
+                  v-if="globalDraft[field.key].mode === 'duration'"
+                  v-model:value="globalDraft[field.key].seconds"
+                  placeholder="秒"
+                  :input-props="{ 'aria-label': `全局 ${field.label} 秒数`, inputmode: 'numeric' }"
                 />
-              </ElSelect>
-              <ElInput
-                v-if="globalDraft[field.key].mode === 'duration'"
-                v-model="globalDraft[field.key].seconds"
-                :aria-label="`全局 ${field.label} 秒数`"
-                inputmode="numeric"
-                placeholder="秒"
-              />
-            </div>
-          </ElFormItem>
+              </div>
+            </template>
+          </FieldRow>
         </div>
         <div v-if="globalEstimate" class="retention__impact" aria-label="全局保留影响估算">
           <h4>即将缩短的影响</h4>
@@ -596,20 +600,20 @@ onMounted(() => {
               </p>
             </li>
           </ul>
-          <ElButton
+          <NButton
             type="primary"
             :loading="saving"
             :disabled="!globalEstimate.complete"
             @click="confirmGlobalSave"
           >
             确认保存全局默认保留组（revision {{ globalPolicy.revision }}）
-          </ElButton>
-          <ElButton @click="cancelGlobalEstimate">取消</ElButton>
+          </NButton>
+          <NButton @click="cancelGlobalEstimate">取消</NButton>
         </div>
-        <ElButton v-else type="primary" :loading="estimating" @click="requestGlobalEstimate">
+        <NButton v-else type="primary" :loading="estimating" @click="requestGlobalEstimate">
           查看影响估算（revision {{ globalPolicy.revision }}）
-        </ElButton>
-      </ElForm>
+        </NButton>
+      </NForm>
     </template>
   </section>
 </template>
@@ -633,12 +637,12 @@ onMounted(() => {
 
 .retention__note {
   margin: 0.35rem 0;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .retention__failure {
   margin: 0.35rem 0;
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .retention__grid {
@@ -685,7 +689,7 @@ onMounted(() => {
 .retention__impact {
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
-  border: 1px solid var(--el-border-color);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
 }
 

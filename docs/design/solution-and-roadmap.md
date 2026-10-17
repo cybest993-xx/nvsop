@@ -178,7 +178,7 @@
 
 **【已定】会话与口令**：会话记录由 `auth` 存于 PostgreSQL（重启不掉线，可强制下线），口令用 Argon2id。不用无状态签名 Cookie——无法即时吊销。
 
-**【已定】基础 Web 栈内选型**：Element Plus + Pinia；OpenAPI 生成的 TS 客户端置于 `apps/control-web/src/api/generated` 并提交，CI 校验重新生成后工作区干净。`packages/` 需两个真实调用方才允许上移。
+**【已定】基础 Web 栈内选型**：Naive UI + Pinia（组件库由 [ADR-0013](../adr/0013-web-component-library-is-naive-ui.md) 决定）；OpenAPI 生成的 TS 客户端置于 `apps/control-web/src/api/generated` 并提交，CI 校验重新生成后工作区干净。`packages/` 需两个真实调用方才允许上移。
 
 **【已定】API 前缀**：控制面路径固定 `/api/v1`，但该前缀不是版本轴，不会出现 v2（[ADR-0003](../adr/0003-api-v1-is-a-fixed-prefix.md)）。`openapi.json` 由 FastAPI 生成并导出到 `packages/contracts/`；契约检查必须让删除路径/字段、新增必填字段、收窄类型失败。推理机是可能非同步升级的客户端，靠启动时版本握手而非 URL 版本。
 

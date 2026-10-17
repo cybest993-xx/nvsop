@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { NTag, useMessage } from 'naive-ui'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import {
   openRuntimeProjection,
@@ -12,6 +12,8 @@ import {
 import { reasonLabel } from '@/reasonCodes'
 import { useSessionStore } from '@/session/store'
 import EvidencePlayer from './EvidencePlayer.vue'
+
+const message = useMessage()
 
 const props = defineProps<{ stations: StationView[] }>()
 const session = useSessionStore()
@@ -151,10 +153,10 @@ async function loadViolations(): Promise<void> {
     for (const value of result.items) seenViolations.add(value.event_id)
     pendingDecisions.clear()
     for (const value of alerts) {
-      ElMessage.warning({
-        message: `新上报违规：${reasonLabel(value.violation.reason_code)}；原确认时间 ${time(value.latched_at ?? null)}`,
-        duration: 5000,
-      })
+      message.warning(
+        `新上报违规：${reasonLabel(value.violation.reason_code)}；原确认时间 ${time(value.latched_at ?? null)}`,
+        { duration: 5000 },
+      )
     }
   } catch (error) {
     if (active && revision === loadRevision) {
@@ -458,9 +460,9 @@ onUnmounted(() => {
           >
             <div class="runtime__storage-heading">
               <strong>{{ storageLabels[fact.stream_id ?? ''] ?? fact.stream_id }}</strong>
-              <el-tag :type="fact.status === 'delivering' ? 'success' : 'danger'" size="small">
+              <NTag :type="fact.status === 'delivering' ? 'success' : 'error'" size="small">
                 {{ fact.status === 'delivering' ? '存储可用' : '存储失效' }}
-              </el-tag>
+              </NTag>
             </div>
             <p v-if="typeof metrics.used_percent === 'number'">
               使用 {{ percent(metrics.used_percent) }}
@@ -488,7 +490,7 @@ onUnmounted(() => {
 .runtime__violations {
   margin: 1rem 0;
   padding: 1rem 0;
-  border-top: 1px solid var(--el-border-color);
+  border-top: 1px solid var(--color-border);
 }
 .runtime__violations-header {
   display: flex;
@@ -505,8 +507,8 @@ onUnmounted(() => {
   padding: 0;
 }
 .runtime__violation-list li {
-  border: 1px solid var(--el-border-color);
-  border-inline-start: 3px solid var(--el-color-warning);
+  border: 1px solid var(--color-border);
+  border-inline-start: 3px solid var(--color-warning);
   padding: 0.75rem;
   overflow-wrap: anywhere;
 }
@@ -521,7 +523,7 @@ onUnmounted(() => {
 }
 .runtime__storage {
   padding: 0.75rem 0;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--color-border-light);
 }
 .runtime__storage-heading {
   display: flex;
@@ -542,7 +544,7 @@ onUnmounted(() => {
   margin: 0;
 }
 .runtime .muted {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 @media (max-width: 720px) {
   .runtime__grid {

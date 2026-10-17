@@ -294,7 +294,9 @@ test('SYS-24-05 — an operator manages a connector without secrets and sees the
   await expect(page.getByRole('button', { name: '测试连接' })).toBeVisible()
 
   await page.getByRole('button', { name: '新建连接器' }).click()
-  const dialog = page.getByRole('dialog', { name: '新建连接器' })
+  // Naive UI's dialogs carry role=dialog but no accessible name (the title is rendered text, not
+// wired to aria-labelledby), so the dialog is located by role and identified by its content.
+  const dialog = page.getByRole('dialog')
   await dialog.getByLabel('名称').fill('新连接器')
   await dialog.getByLabel('地址').fill('10.0.8.22')
   await dialog.getByLabel('端口（可选）').fill('8080')
@@ -304,7 +306,7 @@ test('SYS-24-05 — an operator manages a connector without secrets and sees the
 
   const createdRow = connectorsTable.getByRole('row', { name: /新连接器/ })
   await createdRow.getByRole('button', { name: '编辑' }).click()
-  const editDialog = page.getByRole('dialog', { name: '编辑连接器' })
+  const editDialog = page.getByRole('dialog')
   await editDialog.getByLabel('地址').fill('10.0.8.23')
   await editDialog.getByRole('button', { name: '保存' }).click()
   await expect(connectorsTable.getByRole('row', { name: /新连接器/ })).toContainText('10.0.8.23')
@@ -324,8 +326,8 @@ test('SYS-24-05 — an operator manages a connector without secrets and sees the
     .getByRole('row', { name: /新连接器/ })
     .getByRole('button', { name: '详情' })
     .click()
-  await expect(page.getByRole('dialog', { name: '连接器详情' })).toContainText('10.0.8.23')
-  await expect(page.getByRole('dialog', { name: '连接器详情' })).toContainText('未验证')
+  await expect(page.getByRole('dialog')).toContainText('10.0.8.23')
+  await expect(page.getByRole('dialog')).toContainText('未验证')
   await page.keyboard.press('Escape')
 
   await connectorsTable

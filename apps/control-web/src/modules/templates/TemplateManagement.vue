@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElButton, ElDialog, ElFormItem, ElInput, ElMessage, ElTag } from 'element-plus'
+import { NButton, NInput, NModal, NTag, useMessage } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 
 import {
@@ -17,10 +17,13 @@ import {
   type TemplateImportView,
   type TemplateVersionView,
 } from '@/api/controlPlane'
+import FieldRow from '@/components/FieldRow.vue'
 import { useSessionStore } from '@/session/store'
 
 import TemplateDraftEditor from './TemplateDraftEditor.vue'
 import type { DraftEditorTarget } from './TemplateDraftEditor.types'
+
+const message = useMessage()
 
 const session = useSessionStore()
 const drafts = ref<TemplateDraftView[]>([])
@@ -112,7 +115,7 @@ async function importFile(event: Event): Promise<void> {
   }
   try {
     await importTemplateDraft(file, file.name)
-    ElMessage.success('模板已导入为草稿')
+    message.success('模板已导入为草稿')
     await load()
   } catch (error) {
     recordFailure(error)
@@ -143,7 +146,7 @@ async function confirmPublish(): Promise<void> {
   publishingDraftId.value = draft.id
   try {
     await publishTemplateVersion(draft.id, draft.revision)
-    ElMessage.success('模板版本已发布')
+    message.success('模板版本已发布')
     cancelPublish()
     await load()
   } catch (error) {
@@ -265,11 +268,11 @@ function importStatusLabel(status: string): string {
   }
 }
 
-function importStatusTag(status: string): 'success' | 'danger' | 'warning' {
+function importStatusTag(status: string): 'success' | 'error' | 'warning' {
   if (status === 'succeeded') {
     return 'success'
   }
-  return status === 'failed' ? 'danger' : 'warning'
+  return status === 'failed' ? 'error' : 'warning'
 }
 
 function canEditDraft(draft: TemplateDraftView): boolean {
@@ -305,7 +308,7 @@ function openKnownEditor(): void {
 }
 
 async function editorSaved(): Promise<void> {
-  ElMessage.success('模板草稿已保存')
+  message.success('模板草稿已保存')
   await load()
 }
 
@@ -361,20 +364,30 @@ onMounted(load)
       <h2 id="known-draft-heading">按标识编辑草稿</h2>
       <p>当前没有模板查看权限。不会读取草稿或导入记录，请使用已知 ID 和修订号。</p>
       <div class="template-management__direct-fields">
-        <ElFormItem label="草稿 ID">
-          <ElInput v-model="knownDraftId" name="known-draft-id" autocomplete="off" />
-        </ElFormItem>
-        <ElFormItem label="已知修订号">
-          <ElInput
-            v-model="knownRevision"
-            name="known-draft-revision"
-            type="number"
-            inputmode="numeric"
-            autocomplete="off"
-          />
-        </ElFormItem>
+        <FieldRow label="草稿 ID">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="knownDraftId"
+              :input-props="{ id, name: 'known-draft-id', autocomplete: 'off' }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="已知修订号">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="knownRevision"
+              :input-props="{
+                id,
+                name: 'known-draft-revision',
+                type: 'number',
+                inputmode: 'numeric',
+                autocomplete: 'off',
+              }"
+            />
+          </template>
+        </FieldRow>
       </div>
-      <ElButton type="primary" @click="openKnownEditor">按标识编辑</ElButton>
+      <NButton type="primary" @click="openKnownEditor">按标识编辑</NButton>
     </div>
 
     <div v-else-if="mayView" class="template-management__workbench">
@@ -408,22 +421,22 @@ onMounted(load)
               </th>
               <td>{{ draft.steps.length }} 个步骤</td>
               <td>
-                <ElTag :type="orderingTag(draft.ordering)" disable-transitions>
+                <NTag :type="orderingTag(draft.ordering)" disable-transitions>
                   {{ orderingLabel(draft.ordering) }}
-                </ElTag>
+                </NTag>
               </td>
               <td>{{ draft.revision }}</td>
               <td class="template-management__actions">
                 <template v-if="mayEdit">
-                  <ElButton
+                  <NButton
                     v-if="canEditDraft(draft)"
                     link
                     type="primary"
                     @click="openEditor(draft)"
                   >
                     编辑草稿
-                  </ElButton>
-                  <ElButton
+                  </NButton>
+                  <NButton
                     v-if="canEditDraft(draft)"
                     link
                     type="warning"
@@ -432,7 +445,7 @@ onMounted(load)
                     @click="requestPublish(draft)"
                   >
                     发布版本
-                  </ElButton>
+                  </NButton>
                   <span v-if="!canEditDraft(draft)" class="template-management__muted">
                     未知值，不能编辑或发布
                   </span>
@@ -472,9 +485,9 @@ onMounted(load)
             <tr v-for="record in imports" :key="record.id">
               <th scope="row">{{ record.filename }}</th>
               <td>
-                <ElTag :type="importStatusTag(record.status)" disable-transitions>
+                <NTag :type="importStatusTag(record.status)" disable-transitions>
                   {{ importStatusLabel(record.status) }}
-                </ElTag>
+                </NTag>
               </td>
               <td>
                 <ul v-if="record.errors.length" class="template-management__record-errors">
@@ -486,9 +499,7 @@ onMounted(load)
                 <span v-else class="template-management__muted">无</span>
               </td>
               <td>
-                <ElButton link type="primary" @click="downloadImport(record)">
-                  下载原文件
-                </ElButton>
+                <NButton link type="primary" @click="downloadImport(record)"> 下载原文件 </NButton>
               </td>
             </tr>
             <tr v-if="imports.length === 0">
@@ -525,9 +536,9 @@ onMounted(load)
               <th scope="row">
                 <code>{{ version.id }}</code>
                 <small>模板 {{ version.template_id }}</small>
-                <ElButton link type="primary" @click="openVersionDetail(version)">
+                <NButton link type="primary" @click="openVersionDetail(version)">
                   查看详情
-                </ElButton>
+                </NButton>
               </th>
               <td>
                 <code>{{ version.source_draft_id }}</code>
@@ -545,9 +556,9 @@ onMounted(load)
                 <small>发布人：{{ version.published_by }}</small>
               </td>
               <td>
-                <ElTag :type="orderingTag(version.ordering)" disable-transitions>
+                <NTag :type="orderingTag(version.ordering)" disable-transitions>
                   {{ orderingLabel(version.ordering) }}
-                </ElTag>
+                </NTag>
                 <small>开始：{{ signalLabel(version.start_signal) }}</small>
                 <small>结束：{{ signalListLabel(version.end_signals) }}</small>
                 <small>步骤：{{ version.steps.map((step) => step.description).join('、') }}</small>
@@ -567,14 +578,14 @@ onMounted(load)
                       <strong>{{ artifact.name }}</strong>
                       <small>{{ artifact.byte_length }} 字节 · {{ artifact.sha256 }}</small>
                     </span>
-                    <ElButton
+                    <NButton
                       link
                       type="primary"
                       :loading="downloadingArtifact === `${version.id}:${artifact.name}`"
                       @click="downloadVersionArtifact(version, artifact.name)"
                     >
                       下载 {{ artifact.name }}
-                    </ElButton>
+                    </NButton>
                   </li>
                 </ul>
               </td>
@@ -589,7 +600,12 @@ onMounted(load)
 
     <p v-else class="template-management__empty-state">当前没有模板查看权限。</p>
 
-    <ElDialog v-model="publishConfirmationVisible" title="确认发布" width="42rem">
+    <NModal
+      v-model:show="publishConfirmationVisible"
+      preset="dialog"
+      title="确认发布"
+      :style="{ width: '42rem' }"
+    >
       <div v-if="publishTarget" class="template-management__dialog-content">
         <p>将发布草稿修订 {{ publishTarget.revision }}，生成新的不可变模板版本。</p>
         <dl class="template-management__details">
@@ -626,20 +642,25 @@ onMounted(load)
           发布只表示中心后台保存了版本，不代表工位已绑定或推理机已经生效。版本发布后不可修改。
         </p>
       </div>
-      <template #footer>
-        <ElButton :disabled="publishingDraftId !== ''" @click="cancelPublish">取消</ElButton>
-        <ElButton
+      <template #action>
+        <NButton :disabled="publishingDraftId !== ''" @click="cancelPublish">取消</NButton>
+        <NButton
           type="primary"
           :loading="publishingDraftId !== ''"
           :disabled="publishTarget === null"
           @click="confirmPublish"
         >
           确认发布
-        </ElButton>
+        </NButton>
       </template>
-    </ElDialog>
+    </NModal>
 
-    <ElDialog v-model="versionDetailVisible" title="版本详情" width="48rem">
+    <NModal
+      v-model:show="versionDetailVisible"
+      preset="dialog"
+      title="版本详情"
+      :style="{ width: '48rem' }"
+    >
       <div v-if="detailVersion" class="template-management__dialog-content">
         <p class="template-management__dialog-note">模板版本发布后不可修改。</p>
         <dl class="template-management__details">
@@ -712,10 +733,10 @@ onMounted(load)
           </li>
         </ol>
       </div>
-      <template #footer>
-        <ElButton @click="versionDetailVisible = false">关闭</ElButton>
+      <template #action>
+        <NButton @click="versionDetailVisible = false">关闭</NButton>
       </template>
-    </ElDialog>
+    </NModal>
 
     <TemplateDraftEditor
       v-model="editorVisible"
@@ -798,9 +819,9 @@ onMounted(load)
 .template-management__failure {
   margin: 0 0 0.8rem;
   padding: 0.7rem 0.9rem;
-  border-left: 3px solid var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .template-management__errors {
@@ -808,7 +829,7 @@ onMounted(load)
   padding: 0.65rem 0.9rem 0.65rem 2rem;
   border: 1px solid #e6caca;
   background: #fff8f8;
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .template-management__workbench {

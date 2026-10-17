@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElButton, ElMessage, ElTag } from 'element-plus'
+import { NButton, NTag, useMessage } from 'naive-ui'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
@@ -46,6 +46,8 @@ import {
 import { useSessionStore } from '@/session/store'
 
 import { ObjectUploadError, uploadVideoObject } from './upload'
+
+const message = useMessage()
 
 const DATASET_VIEW_PERMISSION = 'dataset.dataset.view'
 const DATASET_EDIT_PERMISSION = 'dataset.dataset.edit'
@@ -267,12 +269,12 @@ function statusLabel(status: string): string {
   }
 }
 
-function statusTag(status: string): 'success' | 'warning' | 'danger' | 'info' {
+function statusTag(status: string): 'success' | 'warning' | 'error' | 'info' {
   switch (status) {
     case 'registered':
       return 'success'
     case 'failed':
-      return 'danger'
+      return 'error'
     case 'pending_upload':
       return 'warning'
     default:
@@ -357,12 +359,12 @@ function usageRevisionLabel(check: DatasetUsageCheck): string {
   return revisions.length === 0 ? '无视频修订' : `动作列表/标注修订 ${revisions.join('、')}`
 }
 
-function usageStatusTag(status: string): 'success' | 'warning' | 'danger' | 'info' {
+function usageStatusTag(status: string): 'success' | 'warning' | 'error' | 'info' {
   switch (status) {
     case 'passed':
       return 'success'
     case 'failed':
-      return 'danger'
+      return 'error'
     case 'pending':
     case 'running':
       return 'warning'
@@ -463,12 +465,12 @@ function isDdmCancelable(command: DdmTrainingCommand): boolean {
   )
 }
 
-function ddmCommandStatusTag(status: string): 'success' | 'warning' | 'danger' | 'info' {
+function ddmCommandStatusTag(status: string): 'success' | 'warning' | 'error' | 'info' {
   switch (status) {
     case 'completed':
       return 'success'
     case 'failed':
-      return 'danger'
+      return 'error'
     case 'pending':
     case 'result_unknown':
     case 'bound':
@@ -827,7 +829,7 @@ async function cancelDdmCommand(command: DdmTrainingCommand): Promise<void> {
     ddmCommands.value = ddmCommands.value.map((existing) =>
       existing.id === updated.id ? updated : existing,
     )
-    ElMessage.success(
+    message.success(
       dispatched
         ? '已记录取消请求；进程停止由训练执行器核实，未核实前不会宣告已停止'
         : 'DDM 训练命令已取消',
@@ -862,7 +864,7 @@ async function runUsageCheck(kind: 'ddm' | 'vlm'): Promise<void> {
       candidate_id: kind === 'vlm' ? selectedCandidateId.value : null,
     })
     usageChecks.value = [accepted.check, ...usageChecks.value]
-    ElMessage.success(`${kind === 'ddm' ? 'DDM' : 'VLM'} 用途检查已提交`)
+    message.success(`${kind === 'ddm' ? 'DDM' : 'VLM'} 用途检查已提交`)
   } catch (error) {
     recordFailure(error)
   } finally {
@@ -906,7 +908,7 @@ async function saveVlmCandidate(): Promise<void> {
     selectedCandidateId.value = candidate.id
     candidateRecordsInput.value = '[]'
     candidateMediaInput.value = '[]'
-    ElMessage.success(`VLM 候选已登记为修订 ${candidate.revision}`)
+    message.success(`VLM 候选已登记为修订 ${candidate.revision}`)
   } catch (error) {
     recordFailure(error)
   } finally {
@@ -925,7 +927,7 @@ async function generateArtifact(check: DatasetUsageCheck): Promise<void> {
       accepted.artifact,
       ...artifacts.value.filter((item) => item.id !== accepted.artifact.id),
     ]
-    ElMessage.success('DDM annotation 制品生成已提交')
+    message.success('DDM annotation 制品生成已提交')
   } catch (error) {
     recordFailure(error)
   } finally {
@@ -1007,7 +1009,7 @@ async function createDataset(): Promise<void> {
     knownDatasetId.value = created.id
     datasetName.value = ''
     selectDataset(created.id)
-    ElMessage.success('训练数据集已创建')
+    message.success('训练数据集已创建')
   } catch (error) {
     recordFailure(error)
   }
@@ -1233,12 +1235,12 @@ function annotationStatusLabel(status: string): string {
   }
 }
 
-function annotationStatusTag(status: string): 'success' | 'warning' | 'danger' | 'info' {
+function annotationStatusTag(status: string): 'success' | 'warning' | 'error' | 'info' {
   switch (status) {
     case 'succeeded':
       return 'success'
     case 'failed':
-      return 'danger'
+      return 'error'
     case 'pending':
     case 'running':
       return 'warning'
@@ -1607,7 +1609,7 @@ onUnmounted(() => {
             autocomplete="off"
           />
         </label>
-        <ElButton type="primary" native-type="submit">创建数据集</ElButton>
+        <NButton type="primary" attr-type="submit">创建数据集</NButton>
       </form>
 
       <form class="datasets__card" aria-label="上传训练视频" @submit.prevent="submitUpload">
@@ -1662,9 +1664,9 @@ onUnmounted(() => {
           />
         </label>
         <span v-if="selectedFile" class="datasets__file-name">已选择：{{ selectedFile.name }}</span>
-        <ElButton
+        <NButton
           type="primary"
-          native-type="submit"
+          attr-type="submit"
           :disabled="
             transferPhase === 'requesting' ||
             transferPhase === 'uploading' ||
@@ -1680,7 +1682,7 @@ onUnmounted(() => {
                   ? '通知中心校验'
                   : '上传视频'
           }}
-        </ElButton>
+        </NButton>
         <p
           v-if="transferPhase !== 'idle'"
           class="datasets__transfer-state"
@@ -1701,14 +1703,14 @@ onUnmounted(() => {
         >
           已保留视频身份 {{ pendingUpload.memberId }}；选择相同文件后会继续本次上传。
         </p>
-        <ElButton
+        <NButton
           v-if="transferPhase === 'awaiting_confirmation'"
           link
           type="warning"
           @click="confirmAfterTransfer"
         >
           重试通知中心
-        </ElButton>
+        </NButton>
       </form>
     </div>
 
@@ -1722,14 +1724,14 @@ onUnmounted(() => {
           <h2 id="action-list-heading">动作列表</h2>
           <p>每次登记追加一个版本；旧版本只读，不会重新解释已经保存的标注。</p>
         </div>
-        <ElButton
+        <NButton
           link
           type="primary"
           :disabled="loadingActionListHistory"
           @click="readActionListHistory"
         >
           {{ loadingActionListHistory ? '正在读取…' : '读取版本历史' }}
-        </ElButton>
+        </NButton>
       </div>
       <form
         aria-label="登记动作列表"
@@ -1746,7 +1748,7 @@ onUnmounted(() => {
             autocomplete="off"
           />
         </label>
-        <ElButton type="primary" native-type="submit">登记新版本</ElButton>
+        <NButton type="primary" attr-type="submit">登记新版本</NButton>
       </form>
       <ol v-if="actionListHistory" class="datasets__action-list-history">
         <li v-for="revision in actionListHistory.items" :key="revision.revision">
@@ -1787,21 +1789,17 @@ onUnmounted(() => {
         >
       </div>
       <div v-if="mayEdit" class="datasets__usage-actions">
-        <ElButton
-          type="primary"
-          :disabled="runningUsageKind !== null"
-          @click="runUsageCheck('ddm')"
-        >
+        <NButton type="primary" :disabled="runningUsageKind !== null" @click="runUsageCheck('ddm')">
           {{ runningUsageKind === 'ddm' ? '正在检查 DDM…' : '检查 DDM 数据' }}
-        </ElButton>
-        <ElButton
+        </NButton>
+        <NButton
           type="primary"
           plain
           :disabled="runningUsageKind !== null || selectedCandidateId === ''"
           @click="runUsageCheck('vlm')"
         >
           {{ runningUsageKind === 'vlm' ? '正在检查 VLM…' : '检查所选 VLM 候选' }}
-        </ElButton>
+        </NButton>
       </div>
       <form
         v-if="mayEdit"
@@ -1849,9 +1847,9 @@ onUnmounted(() => {
             spellcheck="false"
           />
         </label>
-        <ElButton type="primary" native-type="submit" :disabled="loadingCandidate">
+        <NButton type="primary" attr-type="submit" :disabled="loadingCandidate">
           {{ loadingCandidate ? '正在登记…' : '登记候选修订' }}
-        </ElButton>
+        </NButton>
       </form>
       <div v-if="candidates.length" class="datasets__candidate-list">
         <label for="vlm-candidate-select">
@@ -1879,14 +1877,14 @@ onUnmounted(() => {
           <tr v-for="check in usageChecks" :key="check.id">
             <th scope="row">
               {{ usageKindLabel(check.kind) }}
-              <ElTag :type="usageStatusTag(check.status)" disable-transitions>
+              <NTag :type="usageStatusTag(check.status)" disable-transitions>
                 {{ usageStatusLabel(check.status) }}
-              </ElTag>
+              </NTag>
               <small>任务：{{ check.job_id ?? '—' }}</small>
               <small>检查时间：{{ formatTime(check.created_at) }}</small>
-              <ElTag v-if="!check.is_current" type="warning" disable-transitions>
+              <NTag v-if="!check.is_current" type="warning" disable-transitions>
                 输入已变化，需重新检查
-              </ElTag>
+              </NTag>
             </th>
             <td>
               <code class="datasets__digest">{{ check.input_digest }}</code>
@@ -1913,20 +1911,20 @@ onUnmounted(() => {
             <td>
               <template v-for="artifact in artifacts" :key="artifact.id">
                 <template v-if="artifact.usage_check_id === check.id">
-                  <ElTag
+                  <NTag
                     :type="artifact.status === 'available' ? 'success' : 'info'"
                     disable-transitions
                   >
                     {{ artifactStatusLabel(artifact.status) }}
-                  </ElTag>
-                  <ElButton
+                  </NTag>
+                  <NButton
                     v-if="artifact.status === 'available'"
                     link
                     type="primary"
                     @click="downloadArtifact(artifact)"
                   >
                     下载 annotation.json
-                  </ElButton>
+                  </NButton>
                   <small v-if="artifact.status === 'available'" class="datasets__issue-detail">
                     字节校验：SHA-256 {{ artifact.artifact_sha256 ?? '—' }}；大小
                     {{ formatBytes(artifact.artifact_size) }}
@@ -1938,7 +1936,7 @@ onUnmounted(() => {
                   </small>
                 </template>
               </template>
-              <ElButton
+              <NButton
                 v-if="
                   mayEdit && check.kind === 'ddm' && check.status === 'passed' && check.is_current
                 "
@@ -1948,7 +1946,7 @@ onUnmounted(() => {
                 @click="generateArtifact(check)"
               >
                 生成 DDM 制品
-              </ElButton>
+              </NButton>
               <span
                 v-if="
                   !artifacts.some((artifact) => artifact.usage_check_id === check.id) &&
@@ -1988,9 +1986,9 @@ onUnmounted(() => {
             应用受理、基座原状态与结果登记是三个独立事实；未知状态按原值显示。可取消未派发命令；已派发命令只记录取消请求，进程停止核实后才会显示“已取消（已核实停止）”。
           </p>
         </div>
-        <ElButton link type="primary" :disabled="loadingDdmCommands" @click="refreshDdmCommands">
+        <NButton link type="primary" :disabled="loadingDdmCommands" @click="refreshDdmCommands">
           {{ loadingDdmCommands ? '正在刷新…' : '手动刷新' }}
-        </ElButton>
+        </NButton>
       </div>
       <p v-if="ddmCommandsFailed" class="datasets__muted">DDM 训练命令读取失败，请手动刷新。</p>
       <p v-else-if="!loadingDdmCommands && ddmCommands.length === 0" class="datasets__empty">
@@ -2017,9 +2015,9 @@ onUnmounted(() => {
               <small>基座任务：{{ command.base_job_id ?? '尚未绑定' }}</small>
             </th>
             <td>
-              <ElTag :type="ddmCommandStatusTag(command.status)" disable-transitions>
+              <NTag :type="ddmCommandStatusTag(command.status)" disable-transitions>
                 {{ ddmCommandStatusLabel(command) }}
-              </ElTag>
+              </NTag>
               <small v-if="command.status === 'cancelled' && command.cancelled_at">
                 取消生效：{{ formatTime(command.cancelled_at) }}
               </small>
@@ -2040,15 +2038,15 @@ onUnmounted(() => {
                 {{ command.failure_code }}：{{ command.failure_detail }}
               </small>
               <div v-if="mayEdit && isDdmCancelable(command)" class="datasets__command-action">
-                <ElButton
+                <NButton
                   link
-                  type="danger"
+                  type="error"
                   :disabled="cancellingCommandId !== null"
                   :loading="cancellingCommandId === command.id"
                   @click="cancelDdmCommand(command)"
                 >
                   {{ command.status === 'pending' ? '取消命令' : '请求取消' }}
-                </ElButton>
+                </NButton>
               </div>
             </td>
             <td>
@@ -2070,9 +2068,9 @@ onUnmounted(() => {
             </td>
             <td>
               <template v-if="command.observation_failure_code">
-                <ElTag type="warning" disable-transitions>
+                <NTag type="warning" disable-transitions>
                   {{ command.observation_failure_code }}
-                </ElTag>
+                </NTag>
                 <small>{{ command.observation_failure_detail }}</small>
               </template>
               <span v-else-if="command.last_observed_at" class="datasets__muted"
@@ -2081,19 +2079,19 @@ onUnmounted(() => {
               <span v-else class="datasets__muted">尚未成功观测</span>
             </td>
             <td>
-              <ElTag
+              <NTag
                 :type="command.result_status === 'registered' ? 'success' : 'info'"
                 disable-transitions
               >
                 {{ ddmResultStatusLabel(command.result_status) }}
-              </ElTag>
+              </NTag>
               <small v-if="command.result_registered_at">
                 登记时间：{{ formatTime(command.result_registered_at) }}
               </small>
               <small v-if="command.result_failure_code" class="datasets__failure-code">
                 {{ command.result_failure_code }}：{{ command.result_failure_detail }}
               </small>
-              <ElButton
+              <NButton
                 v-if="command.result_status === 'registered'"
                 link
                 type="primary"
@@ -2101,7 +2099,7 @@ onUnmounted(() => {
                 @click="loadDdmResult(command.id)"
               >
                 读取结果
-              </ElButton>
+              </NButton>
             </td>
           </tr>
         </tbody>
@@ -2167,12 +2165,12 @@ onUnmounted(() => {
             <td>{{ formatTime(dataset.created_at) }}</td>
             <td>{{ formatTime(dataset.updated_at) }}</td>
             <td>
-              <ElTag v-if="selectedDatasetId === dataset.id" type="success" disable-transitions>
+              <NTag v-if="selectedDatasetId === dataset.id" type="success" disable-transitions>
                 当前数据集
-              </ElTag>
-              <ElButton v-else link type="primary" @click="selectDataset(dataset.id)">
+              </NTag>
+              <NButton v-else link type="primary" @click="selectDataset(dataset.id)">
                 查看成员
-              </ElButton>
+              </NButton>
             </td>
           </tr>
           <tr v-if="datasets.length === 0">
@@ -2185,23 +2183,23 @@ onUnmounted(() => {
         class="datasets__pagination"
         aria-label="训练数据集分页"
       >
-        <ElButton
+        <NButton
           link
           type="primary"
           :disabled="datasetPageNumber <= 1"
           @click="changeDatasetPage(datasetPageNumber - 1)"
         >
           上一页
-        </ElButton>
+        </NButton>
         <span>第 {{ datasetPageNumber }} / {{ datasetPageCount }} 页</span>
-        <ElButton
+        <NButton
           link
           type="primary"
           :disabled="datasetPageNumber >= datasetPageCount"
           @click="changeDatasetPage(datasetPageNumber + 1)"
         >
           下一页
-        </ElButton>
+        </NButton>
       </nav>
     </section>
 
@@ -2246,9 +2244,9 @@ onUnmounted(() => {
               <small>尝试：{{ member.current_attempt_id }}</small>
             </th>
             <td>
-              <ElTag :type="statusTag(member.status)" disable-transitions>
+              <NTag :type="statusTag(member.status)" disable-transitions>
                 {{ statusLabel(member.status) }}
-              </ElTag>
+              </NTag>
               <small v-if="member.validation_job_id">
                 任务：{{ member.validation_job_id }} ·
                 {{ jobStatusLabel(jobStatuses[member.validation_job_id]) }}
@@ -2275,7 +2273,7 @@ onUnmounted(() => {
               <small>容器：{{ member.container ?? '—' }}</small>
             </td>
             <td>
-              <ElButton
+              <NButton
                 v-if="mayAnnotate && member.status === 'registered'"
                 link
                 type="primary"
@@ -2283,8 +2281,8 @@ onUnmounted(() => {
                 @click="enterAnnotation(member)"
               >
                 进入标注
-              </ElButton>
-              <ElButton
+              </NButton>
+              <NButton
                 v-if="mayView && member.status === 'registered'"
                 link
                 type="success"
@@ -2292,28 +2290,28 @@ onUnmounted(() => {
                 @click="readAnnotationHistory(member)"
               >
                 查看记录
-              </ElButton>
+              </NButton>
               <span v-if="member.status !== 'registered'" class="datasets__muted"
                 >校验完成后可用</span
               >
             </td>
             <td>
-              <ElButton
+              <NButton
                 v-if="mayImport && member.recovery_action === 'retry_upload'"
                 link
                 type="warning"
                 @click="retryMember(member)"
               >
                 {{ recoveryLabel(member.recovery_action) }}
-              </ElButton>
-              <ElButton
+              </NButton>
+              <NButton
                 v-else-if="mayImport && member.recovery_action === 'retry_validation'"
                 link
                 type="primary"
                 @click="retryMember(member)"
               >
                 {{ recoveryLabel(member.recovery_action) }}
-              </ElButton>
+              </NButton>
               <span v-else-if="member.recovery_action" class="datasets__muted">
                 {{ recoveryLabel(member.recovery_action) }}
               </span>
@@ -2330,23 +2328,23 @@ onUnmounted(() => {
         class="datasets__pagination"
         aria-label="视频成员分页"
       >
-        <ElButton
+        <NButton
           link
           type="primary"
           :disabled="memberPageNumber <= 1"
           @click="changeMemberPage(memberPageNumber - 1)"
         >
           上一页
-        </ElButton>
+        </NButton>
         <span>第 {{ memberPageNumber }} / {{ memberPageCount }} 页</span>
-        <ElButton
+        <NButton
           link
           type="primary"
           :disabled="memberPageNumber >= memberPageCount"
           @click="changeMemberPage(memberPageNumber + 1)"
         >
           下一页
-        </ElButton>
+        </NButton>
       </nav>
 
       <section
@@ -2362,7 +2360,7 @@ onUnmounted(() => {
               >；进入标注不会重新上传视频。
             </p>
           </div>
-          <ElButton link type="info" @click="leaveAnnotation">关闭标注</ElButton>
+          <NButton link type="info" @click="leaveAnnotation">关闭标注</NButton>
         </div>
         <p v-if="loadingAnnotationContext" class="datasets__loading">
           正在准备视频、读取动作列表和历史时间段…
@@ -2417,9 +2415,9 @@ onUnmounted(() => {
           <div v-for="execution in submission.executions" :key="execution.id">
             <p>
               执行第 {{ execution.generation }} 次：
-              <ElTag :type="annotationStatusTag(execution.status)" disable-transitions>
+              <NTag :type="annotationStatusTag(execution.status)" disable-transitions>
                 {{ annotationStatusLabel(execution.status) }}
-              </ElTag>
+              </NTag>
               <span v-if="execution.failure_detail">{{ execution.failure_detail }}</span>
             </p>
             <template v-if="execution.status === 'succeeded'">
@@ -2644,9 +2642,9 @@ onUnmounted(() => {
   gap: 0.2rem;
   margin: 0 0 0.75rem;
   padding: 0.75rem 0.9rem;
-  border-left: 3px solid var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .datasets__field-errors {
@@ -2654,7 +2652,7 @@ onUnmounted(() => {
   padding: 0.65rem 0.9rem 0.65rem 2rem;
   border: 1px solid #e6caca;
   background: #fff8f8;
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .datasets__section-head {
@@ -2900,7 +2898,7 @@ onUnmounted(() => {
 }
 
 .datasets__failure-code {
-  color: var(--el-color-danger) !important;
+  color: var(--color-danger) !important;
   font-weight: 600 !important;
 }
 
@@ -2929,7 +2927,7 @@ onUnmounted(() => {
 }
 
 .datasets :focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 

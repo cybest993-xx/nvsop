@@ -5,7 +5,7 @@
  * Navigation includes the five product sections. An item whose page exists but whose permissions
  * the caller does not hold is not rendered at all: "there but refused" would be a dead end.
  */
-import { ElButton } from 'element-plus'
+import { NButton } from 'naive-ui'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -115,7 +115,7 @@ async function logOut(): Promise<void> {
       <span class="shell__product">SOP 合规检测系统</span>
       <div class="shell__account">
         <span class="shell__user">{{ displayName }}</span>
-        <ElButton link type="primary" @click="logOut">退出</ElButton>
+        <NButton link type="primary" @click="logOut">退出</NButton>
       </div>
     </header>
 
@@ -164,7 +164,7 @@ async function logOut(): Promise<void> {
   justify-content: space-between;
   padding: 0 1.5rem;
   height: 3.5rem;
-  border-bottom: 1px solid var(--el-border-color);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .shell__product {
@@ -178,7 +178,7 @@ async function logOut(): Promise<void> {
 }
 
 .shell__user {
-  color: var(--el-text-color-regular);
+  color: var(--color-text);
 }
 
 .shell__body {
@@ -190,7 +190,7 @@ async function logOut(): Promise<void> {
   /* Fixed width so the content column is stable between 1366 and 1920 px (Q32). */
   width: 13rem;
   padding: 1rem 0;
-  border-right: 1px solid var(--el-border-color);
+  border-right: 1px solid var(--color-border);
 }
 
 .shell__nav-list {
@@ -202,16 +202,16 @@ async function logOut(): Promise<void> {
 .shell__link {
   display: block;
   padding: 0.6rem 1.5rem;
-  color: var(--el-text-color-primary);
+  color: var(--color-text-strong);
   text-decoration: none;
 }
 
 .shell__link:hover {
-  background: var(--el-fill-color-light);
+  background: var(--color-fill);
 }
 
 .shell__link--pending {
-  color: var(--el-text-color-disabled);
+  color: var(--color-text-disabled);
   cursor: not-allowed;
 }
 
@@ -221,9 +221,9 @@ async function logOut(): Promise<void> {
 
 .shell__link.router-link-active {
   /* A left rule as well as the colour, so the current section is identifiable without it. */
-  border-left: 3px solid var(--el-color-primary);
+  border-left: 3px solid var(--color-primary);
   padding-left: calc(1.5rem - 3px);
-  color: var(--el-color-primary);
+  color: var(--color-primary);
   font-weight: 600;
 }
 
@@ -234,11 +234,11 @@ async function logOut(): Promise<void> {
 
 .shell__error {
   margin: 0 0 1rem;
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .shell :focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 </style>

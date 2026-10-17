@@ -1,12 +1,13 @@
-import ElementPlus from 'element-plus'
+import { NTag } from 'naive-ui'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { ControlPlaneError, type DdmTrainingCommand } from '@/api/controlPlane'
 import TrainingDatasetsView from '@/modules/datasets/TrainingDatasetsView.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const api = vi.hoisted(() => ({
   readTrainingDatasets: vi.fn(),
@@ -305,7 +306,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-async function chooseFile(wrapper: ReturnType<typeof mount>, file: File): Promise<void> {
+async function chooseFile(wrapper: ReturnType<typeof mountWithNaive>, file: File): Promise<void> {
   const input = wrapper.find('input[name="dataset-video"]')
   Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
   await input.trigger('change')
@@ -318,8 +319,8 @@ async function mountDatasets() {
   })
   await router.push('/training-datasets')
   await router.isReady()
-  const wrapper = mount(TrainingDatasetsView, {
-    global: { plugins: [ElementPlus, router] },
+  const wrapper = mountWithNaive(TrainingDatasetsView, {
+    global: { plugins: [router] },
   })
   return { wrapper, router }
 }
@@ -1812,7 +1813,7 @@ describe('训练数据集工作台', () => {
     expect(wrapper.text()).toContain('已绑定基座任务（取消未确认）')
     expect(wrapper.text()).toContain('取消请求：')
     expect(wrapper.text()).toContain('停止核实：取消后基座仍报告在运行的进程，停止状态待核实')
-    const statusTags = wrapper.findAll('.el-tag').map((tag) => tag.text())
+    const statusTags = wrapper.findAllComponents(NTag).map((tag) => tag.text())
     expect(statusTags.some((text) => text.includes('已取消'))).toBe(false)
     expect(wrapper.findAll('button').some((button) => button.text().includes('请求取消'))).toBe(
       true,

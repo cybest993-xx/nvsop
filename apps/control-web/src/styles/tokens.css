@@ -1,0 +1,96 @@
+/**
+ * The design tokens. Every colour, radius and surface in the Web UI comes from here; a component
+ * that writes a literal colour or reaches into the component library's own variables has bypassed
+ * the one place the visual language lives.
+ *
+ * The values are the product's own, not the component library's defaults. `naive-theme.ts` maps
+ * them onto Naive UI's theme so the library's components and the hand-written CSS below agree.
+ *
+ * The palette is a dark sidebar against a light content area: the sidebar is where the operator
+ * is, the content is where the work is.
+ */
+
+:root {
+  /* --- Brand and status ---------------------------------------------------------------- */
+  --color-primary: #1c84c6;
+  --color-primary-strong: #17699f;
+  --color-success: #1ab394;
+  --color-warning: #f8ac59;
+  --color-danger: #ed5565;
+
+  /* Tinted backgrounds for banners and inline notices. Derived from the status colours above so
+     a change to one of them carries through, rather than being a second literal to keep in sync. */
+  --color-primary-subtle: color-mix(in srgb, var(--color-primary) 12%, #fff);
+  --color-success-subtle: color-mix(in srgb, var(--color-success) 12%, #fff);
+  --color-warning-subtle: color-mix(in srgb, var(--color-warning) 18%, #fff);
+  --color-warning-strong: color-mix(in srgb, var(--color-warning) 80%, #000);
+
+  /* --- Surfaces ------------------------------------------------------------------------ */
+  --color-page-bg: #f3f3f4;
+  --color-surface: #ffffff;
+  /* Panel and table headers carry the sidebar's dark slate, so a panel reads as a piece of the
+     same system rather than a white box on a grey page. */
+  --color-panel-header: #2f4050;
+  --color-table-header: #a0d4c6;
+  --color-fill: #f6f7f8;
+  --color-fill-light: #fafbfc;
+
+  /* --- Sidebar ------------------------------------------------------------------------- */
+  --color-sidebar-bg: #2f4050;
+  --color-sidebar-bg-deep: #293846;
+  --color-sidebar-text: #a7b1c2;
+  --color-sidebar-text-active: #ffffff;
+  --color-sidebar-active: var(--color-primary);
+
+  /* --- Text ---------------------------------------------------------------------------- */
+  --color-text: #676a6c;
+  --color-text-strong: #2f4050;
+  /* Muted text is body copy — hints, secondary values, empty-state lines — so it has to reach
+     AA on the light surface. The value it replaces, #a7b1c2, measures about 2.2:1 on white:
+     it is a sidebar grey, and on a dark sidebar it is correct, which is where
+     `--color-sidebar-text` still uses it. On white it was unreadable for anyone with reduced
+     contrast sensitivity. */
+  --color-text-muted: #64707d;
+  --color-text-disabled: #c2c9d1;
+  --color-text-on-dark: #ffffff;
+
+  /* --- Lines and shape ----------------------------------------------------------------- */
+  --color-border: #e7eaec;
+  --color-border-light: #f0f2f5;
+  --radius: 4px;
+  --radius-lg: 8px;
+
+  /* --- Spacing ------------------------------------------------------------------------- */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 1.5rem;
+
+  /* --- Type ---------------------------------------------------------------------------- */
+  /* Five steps, and a component picks one rather than inventing a size. Chinese sets looser
+     than Latin — the glyphs fill their em box where Latin leaves air — so the body step is
+     well above what a Latin page would take. */
+  --font-size-title: 20px;
+  --font-size-panel: 14px;
+  --font-size-body: 14px;
+  --font-size-secondary: 13px;
+  --font-size-label: 12px;
+  --font-size-metric: 28px;
+
+  --line-height-title: 1.4;
+  --line-height-panel: 1.4;
+  --line-height-body: 1.7;
+  --line-height-secondary: 1.6;
+  --line-height-label: 1.4;
+  --line-height-metric: 1.1;
+
+  /* Chinese already sits on a fixed rhythm, so body text takes no letter spacing at all; this
+     is the ceiling, and it is only for the 12px label step. */
+  --letter-spacing-label: 0.05em;
+
+  /* --- Layout -------------------------------------------------------------------------- */
+  /* Fixed, so the content column is stable between 1366 and 1920 px (Q32). */
+  --sidebar-width: 15rem;
+  --header-height: 3.5rem;
+}

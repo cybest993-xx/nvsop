@@ -1,12 +1,12 @@
-import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 
 import { ControlPlaneError } from '@/api/controlPlane'
 import DevicesView from '@/modules/devices/DevicesView.vue'
 import ConnectionTestControl from '@/modules/devices/ConnectionTestControl.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const api = vi.hoisted(() => ({
   readConnectors: vi.fn(),
@@ -184,7 +184,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.view'],
     }
 
-    mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    mountWithNaive(DevicesView)
     await flushPromises()
 
     expect(api.readConnectors).toHaveBeenCalledOnce()
@@ -208,7 +208,7 @@ describe('工位与设备中的连接器', () => {
       ],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     const labels = wrapper.findAll('button').map((button) => button.text())
@@ -229,7 +229,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     expect(api.readConnectors).toHaveBeenCalledOnce()
@@ -271,7 +271,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.edit'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     expect(api.readConnectors).not.toHaveBeenCalled()
@@ -318,7 +318,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.delete'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     expect(api.readConnectors).not.toHaveBeenCalled()
@@ -328,7 +328,7 @@ describe('工位与设备中的连接器', () => {
     await flushPromises()
 
     expect(api.deleteConnector).toHaveBeenCalledWith('connector-1', 7)
-    expect(document.body.textContent).toContain('连接器已删除')
+    expect(wrapper.text()).toContain('连接器已删除')
   })
 
   it('creates a connector with only non-secret parameters', async () => {
@@ -347,7 +347,7 @@ describe('工位与设备中的连接器', () => {
       ],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -386,7 +386,7 @@ describe('工位与设备中的连接器', () => {
       expires_at: '2026-09-07T13:00:00Z',
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     const stalePage = deferred<{
@@ -433,7 +433,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.view', 'device.inference_host.view', 'device.station.view'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -470,7 +470,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.view', 'device.inference_host.view', 'device.station.view'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     const detailButtons = wrapper.findAll('button').filter((button) => button.text() === '详情')
     await detailButtons[0]!.trigger('click')
@@ -503,7 +503,7 @@ describe('工位与设备中的连接器', () => {
       ],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -541,7 +541,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -550,7 +550,7 @@ describe('工位与设备中的连接器', () => {
     await flushPromises()
 
     expect(api.setConnectorStatus).toHaveBeenCalledWith('connector-1', 'deactivated', 3)
-    expect(document.body.textContent).toContain('连接器已停用')
+    expect(wrapper.text()).toContain('连接器已停用')
   })
 
   it('deletes with the row revision when delete permission is present', async () => {
@@ -564,7 +564,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.view', 'device.connector.delete'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -573,7 +573,7 @@ describe('工位与设备中的连接器', () => {
     await flushPromises()
 
     expect(api.deleteConnector).toHaveBeenCalledWith('connector-1', 3)
-    expect(document.body.textContent).toContain('连接器已删除')
+    expect(wrapper.text()).toContain('连接器已删除')
   })
 
   it('puts a backend refusal beside the rejected non-secret field', async () => {
@@ -599,7 +599,7 @@ describe('工位与设备中的连接器', () => {
       ],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -629,7 +629,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.view', 'device.inference_host.view', 'device.station.view'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     expect(wrapper.text()).toContain('装配线输入')
@@ -666,7 +666,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     const row = wrapper.find('tbody tr')
@@ -720,7 +720,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.station.view'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     expect(wrapper.text()).toContain('等待推理机应用')
@@ -758,7 +758,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.station.view', 'device.station.edit'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -839,7 +839,7 @@ describe('工位与设备中的连接器', () => {
       permissions: ['device.station.edit'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     expect(api.readStations).not.toHaveBeenCalled()
     await wrapper.find('input[name="known-station-id"]').setValue('station-1')
@@ -896,7 +896,7 @@ describe('工位与设备中的相机媒体', () => {
       permissions: ['device.camera.view'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     expect(api.readCameraMedia).toHaveBeenCalledOnce()
@@ -927,7 +927,7 @@ describe('工位与设备中的相机媒体', () => {
       permissions: ['device.camera.view'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -954,7 +954,7 @@ describe('工位与设备中的保留策略', () => {
       permissions: ['device.station.view', 'retention.policy.view'],
     }
 
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
 
     expect(api.readStationRetention).toHaveBeenCalledWith('station-1')

@@ -2,18 +2,29 @@
 /**
  * The root: the router decides everything, including which layout is in use.
  *
- * `ElConfigProvider` is what puts the component library into Simplified Chinese (Q32). It is the
- * form Element Plus documents, and it is where the rest of the library's global configuration
- * (`size`, `namespace`) goes when a slice needs it — one place rather than two. Passing `locale`
- * to `app.use(ElementPlus, …)` would work equally well; it is not the alternative that was
- * rejected for a technical reason.
+ * `NConfigProvider` is what puts the component library into Simplified Chinese (Q32), and it is
+ * where the library's global configuration (`locale`, `dateLocale`, `themeOverrides`) goes when
+ * something needs it — one place rather than two. `abstract` keeps it from adding a wrapper
+ * element of its own, so it configures the tree without becoming part of it.
+ *
+ * `NMessageProvider` is what `useMessage()` reads. Naive UI has no imperative global message
+ * object the way Element Plus did, so a component that shows a toast has to render inside this
+ * provider; a test mounting such a component needs one above it too.
  */
-import { ElConfigProvider } from 'element-plus'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import { NConfigProvider, NMessageProvider, dateZhCN, zhCN } from 'naive-ui'
+
+import { themeOverrides } from '@/styles/naive-theme'
 </script>
 
 <template>
-  <ElConfigProvider :locale="zhCn">
-    <RouterView />
-  </ElConfigProvider>
+  <NConfigProvider
+    abstract
+    :locale="zhCN"
+    :date-locale="dateZhCN"
+    :theme-overrides="themeOverrides"
+  >
+    <NMessageProvider>
+      <RouterView />
+    </NMessageProvider>
+  </NConfigProvider>
 </template>

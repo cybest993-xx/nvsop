@@ -13,7 +13,7 @@ export function connectorTypeLabel(type: string): string {
 
 export interface ReachabilityPresentation {
   label: string
-  tag: 'success' | 'danger' | 'warning'
+  tag: 'success' | 'error' | 'warning'
 }
 
 export function reachabilityPresentation(value: string): ReachabilityPresentation {
@@ -21,7 +21,7 @@ export function reachabilityPresentation(value: string): ReachabilityPresentatio
     case 'reachable':
       return { label: '可达', tag: 'success' }
     case 'unreachable':
-      return { label: '不可达', tag: 'danger' }
+      return { label: '不可达', tag: 'error' }
     case 'unverified':
       return { label: '未验证', tag: 'warning' }
     default:

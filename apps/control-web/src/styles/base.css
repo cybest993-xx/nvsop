@@ -1,0 +1,51 @@
+/**
+ * The global baseline: box model, page surface, type stack and the focus ring.
+ *
+ * Only what every page shares belongs here. A rule that serves one component belongs in that
+ * component's `<style scoped>`; a rule that serves several belongs in a shared component.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-page-bg);
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  /* The stack puts a Simplified-Chinese face ahead of the Latin fallbacks, because most of the
+     interface is Chinese and the two render at different optical sizes. */
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Q32 requires focus to be visible. Stated once here so a component cannot forget it. */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Naive UI writes `outline: none` on its inner control elements with a two-class selector
+   (`.n-input .n-input__input-el`), which outranks the plain `:focus-visible` above. The focus
+   ring belongs on the control the keyboard user is on, so it is taken back here — the library's
+   class appears only in this one override, at matching specificity. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.n-input .n-input__input-el:focus-visible,
+.n-input .n-input__textarea-el:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}

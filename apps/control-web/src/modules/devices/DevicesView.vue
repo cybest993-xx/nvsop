@@ -1,15 +1,5 @@
 <script setup lang="ts">
-import {
-  ElButton,
-  ElDialog,
-  ElForm,
-  ElFormItem,
-  ElInput,
-  ElMessage,
-  ElOption,
-  ElSelect,
-  ElTag,
-} from 'element-plus'
+import { NButton, NForm, NInput, NModal, NSelect, NTag, useMessage } from 'naive-ui'
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 
 import {
@@ -36,6 +26,7 @@ import {
   statusPresentation,
 } from './devicesPresentation'
 import CameraMediaPanel from './CameraMediaPanel.vue'
+import FieldRow from '@/components/FieldRow.vue'
 import ConnectionTestControl from './ConnectionTestControl.vue'
 import ForceHandoverPanel from './ForceHandoverPanel.vue'
 import NormalHandoverPanel from './NormalHandoverPanel.vue'
@@ -44,6 +35,8 @@ import RecordingCompressionPanel from './RecordingCompressionPanel.vue'
 import StationRetentionPanel from './StationRetentionPanel.vue'
 import StationRuntimePanel from './StationRuntimePanel.vue'
 import StationTemplateConfiguration from './StationTemplateConfiguration.vue'
+
+const message = useMessage()
 
 interface ConnectorDraft {
   name: string
@@ -279,7 +272,7 @@ async function submitConnector(): Promise<void> {
   }
   const wasCreate = connectorDialogMode.value === 'create'
   connectorDialog.value = false
-  ElMessage.success(wasCreate ? '连接器已创建' : '连接器已保存')
+  message.success(wasCreate ? '连接器已创建' : '连接器已保存')
   await load()
 }
 
@@ -301,7 +294,7 @@ async function submitKnownDelete(): Promise<void> {
   if (!(await attempt(() => deleteConnector(target.id, target.revision)))) {
     return
   }
-  ElMessage.success('连接器已删除')
+  message.success('连接器已删除')
   await load()
 }
 
@@ -314,7 +307,7 @@ async function toggleStatus(connector: ConnectorView): Promise<void> {
   if (!(await attempt(() => setConnectorStatus(connector.id, action.next, connector.revision)))) {
     return
   }
-  ElMessage.success(action.successMessage)
+  message.success(action.successMessage)
   await load()
 }
 
@@ -322,7 +315,7 @@ async function removeConnector(connector: ConnectorView): Promise<void> {
   if (!(await attempt(() => deleteConnector(connector.id, connector.revision)))) {
     return
   }
-  ElMessage.success('连接器已删除')
+  message.success('连接器已删除')
   await load()
 }
 
@@ -391,9 +384,9 @@ onMounted(load)
         <h1 id="devices-heading" class="devices__heading">工位与设备</h1>
         <p class="devices__intro">管理连接器与点位的归属、语义和非秘密配置；实测能力单独登记。</p>
       </div>
-      <ElButton v-if="mayEditConnectors" type="primary" @click="openConnectorDialog('create')">
+      <NButton v-if="mayEditConnectors" type="primary" @click="openConnectorDialog('create')">
         新建连接器
-      </ElButton>
+      </NButton>
     </header>
 
     <StationRuntimePanel :stations="stations" />
@@ -451,14 +444,14 @@ onMounted(load)
         <tbody>
           <tr v-for="connector in connectors" :key="connector.id">
             <th scope="row">
-              <ElButton
+              <NButton
                 link
                 type="primary"
                 class="devices__connector-link"
                 @click="openDetail(connector)"
               >
                 {{ connector.name }}
-              </ElButton>
+              </NButton>
             </th>
             <td>{{ connectorTypeLabel(connector.connector_type) }}</td>
             <td>{{ stationNames.get(connector.station_id) ?? connector.station_id }}</td>
@@ -468,53 +461,53 @@ onMounted(load)
               <span v-if="connector.configuration.port"> :{{ connector.configuration.port }} </span>
             </td>
             <td>
-              <ElTag
+              <NTag
                 :type="connector.credentials_configured ? 'success' : 'info'"
                 disable-transitions
               >
                 {{ connector.credentials_configured ? '已配置' : '未配置' }}
-              </ElTag>
+              </NTag>
             </td>
             <td>
-              <ElTag
+              <NTag
                 :type="reachabilityPresentation(connector.reachability).tag"
                 disable-transitions
               >
                 {{ reachabilityPresentation(connector.reachability).label }}
-              </ElTag>
+              </NTag>
             </td>
             <td>
-              <ElTag :type="statusPresentation(connector.status).tag" disable-transitions>
+              <NTag :type="statusPresentation(connector.status).tag" disable-transitions>
                 {{ statusPresentation(connector.status).label }}
-              </ElTag>
+              </NTag>
             </td>
             <td class="devices__row-actions">
-              <ElButton link type="primary" @click="openDetail(connector)">详情</ElButton>
-              <ElButton
+              <NButton link type="primary" @click="openDetail(connector)">详情</NButton>
+              <NButton
                 v-if="mayEditConnectors"
                 link
                 type="primary"
                 @click="openConnectorDialog('edit', connector)"
               >
                 编辑
-              </ElButton>
-              <ElButton
+              </NButton>
+              <NButton
                 v-if="mayEditConnectors && statusPresentation(connector.status).action"
                 link
                 type="primary"
                 @click="toggleStatus(connector)"
               >
                 {{ statusPresentation(connector.status).action?.label }}
-              </ElButton>
+              </NButton>
               <span v-else-if="mayEditConnectors" class="devices__meta"> 状态未知，不能切换 </span>
-              <ElButton
+              <NButton
                 v-if="mayDeleteConnectors"
                 link
-                type="danger"
+                type="error"
                 @click="removeConnector(connector)"
               >
                 删除
-              </ElButton>
+              </NButton>
               <ConnectionTestControl
                 v-if="mayEditConnectors"
                 :connector-id="connector.id"
@@ -540,29 +533,25 @@ onMounted(load)
         当前没有连接器查看权限。不会读取连接器列表或详情，请使用已知的连接器 ID 和修订号。
       </p>
       <div class="devices__row-actions">
-        <ElButton
-          v-if="mayEditConnectors"
-          type="primary"
-          @click="openConnectorDialog('known-edit')"
-        >
+        <NButton v-if="mayEditConnectors" type="primary" @click="openConnectorDialog('known-edit')">
           按标识编辑
-        </ElButton>
-        <ElForm
+        </NButton>
+        <NForm
           v-if="mayEditConnectors"
           inline
           aria-label="按标识测试连接"
           @submit.prevent="submitKnownConnectionTest"
         >
-          <ElFormItem label="连接器 ID">
-            <ElInput
-              id="known-test-connector-id"
-              v-model="knownConnectionTarget.connectorId"
-              name="known-test-connector-id"
-              autocomplete="off"
-            />
-          </ElFormItem>
-          <ElButton type="primary" native-type="submit">测试连接</ElButton>
-        </ElForm>
+          <FieldRow label="连接器 ID">
+            <template #default="{ id }">
+              <NInput
+                v-model:value="knownConnectionTarget.connectorId"
+                :input-props="{ id, name: 'known-test-connector-id', autocomplete: 'off' }"
+              />
+            </template>
+          </FieldRow>
+          <NButton type="primary" attr-type="submit">测试连接</NButton>
+        </NForm>
         <ConnectionTestControl
           v-if="mayEditConnectors && knownConnectionTarget.connectorId.trim()"
           :key="knownConnectionTarget.connectorId.trim()"
@@ -573,102 +562,115 @@ onMounted(load)
           :show-button="false"
           @completed="refreshAfterConnectionTest"
         />
-        <ElForm v-if="mayDeleteConnectors" inline @submit.prevent="submitKnownDelete">
-          <ElFormItem v-for="field in knownTargetFields" :key="field.key" :label="field.label">
-            <ElInput
-              :id="`known-delete-${field.key === 'connectorId' ? 'connector-id' : 'revision'}`"
-              v-model="knownTargetDraft[field.key]"
-              :name="field.key === 'connectorId' ? 'known-connector-id' : 'known-revision'"
-              :type="field.key === 'revision' ? 'number' : 'text'"
-              :inputmode="field.key === 'revision' ? 'numeric' : undefined"
-              autocomplete="off"
-            />
-          </ElFormItem>
-          <ElButton type="danger" native-type="submit">删除</ElButton>
-        </ElForm>
+        <NForm v-if="mayDeleteConnectors" inline @submit.prevent="submitKnownDelete">
+          <FieldRow v-for="field in knownTargetFields" :key="field.key" :label="field.label">
+            <template #default="{ id }">
+              <NInput
+                v-model:value="knownTargetDraft[field.key]"
+                :input-props="{
+                  id,
+                  name: field.key === 'connectorId' ? 'known-connector-id' : 'known-revision',
+                  type: field.key === 'revision' ? 'number' : 'text',
+                  inputmode: field.key === 'revision' ? 'numeric' : undefined,
+                  autocomplete: 'off',
+                }"
+              />
+            </template>
+          </FieldRow>
+          <NButton type="error" attr-type="submit">删除</NButton>
+        </NForm>
       </div>
     </div>
 
-    <ElDialog
-      v-model="connectorDialog"
+    <NModal
+      v-model:show="connectorDialog"
+      preset="dialog"
       :title="connectorDialogMode === 'create' ? '新建连接器' : '编辑连接器'"
-      width="38rem"
+      :style="{ width: '38rem' }"
     >
       <p class="devices__form-note">这里只保存地址和端口等非秘密参数；凭据由推理机本地配置。</p>
-      <ElForm label-position="top" @submit.prevent="submitConnector">
+      <NForm label-placement="top" @submit.prevent="submitConnector">
         <div v-if="connectorDialogMode === 'known-edit'" class="devices__form-grid">
-          <ElFormItem v-for="field in knownTargetFields" :key="field.key" :label="field.label">
-            <ElInput
-              :id="`known-${field.key === 'connectorId' ? 'connector-id' : 'revision'}`"
-              v-model="knownTargetDraft[field.key]"
-              :name="field.key === 'connectorId' ? 'known-connector-id' : 'known-revision'"
-              :type="field.key === 'revision' ? 'number' : 'text'"
-              :inputmode="field.key === 'revision' ? 'numeric' : undefined"
-              autocomplete="off"
-            />
-          </ElFormItem>
+          <FieldRow v-for="field in knownTargetFields" :key="field.key" :label="field.label">
+            <template #default="{ id }">
+              <NInput
+                v-model:value="knownTargetDraft[field.key]"
+                :input-props="{
+                  id,
+                  name: field.key === 'connectorId' ? 'known-connector-id' : 'known-revision',
+                  type: field.key === 'revision' ? 'number' : 'text',
+                  inputmode: field.key === 'revision' ? 'numeric' : undefined,
+                  autocomplete: 'off',
+                }"
+              />
+            </template>
+          </FieldRow>
         </div>
         <div class="devices__form-grid">
-          <ElFormItem v-for="field in basicFields" :key="field.key" :label="field.label">
-            <ElSelect
-              v-if="field.type === 'select'"
-              v-model="draft[field.key]"
-              aria-label="连接器类型"
-              class="devices__select"
-            >
-              <ElOption label="海康 ISAPI" value="hikvision_isapi" />
-              <ElOption label="板卡连接器" value="board_card" />
-            </ElSelect>
-            <ElInput
-              v-else
-              :id="`connector-${field.key}`"
-              v-model="draft[field.key]"
-              :name="field.key"
-              :type="field.type"
-              :inputmode="field.key === 'port' ? 'numeric' : undefined"
-              autocomplete="off"
-            />
-            <p v-if="fieldError(field.key)" class="devices__field-error" role="alert">
-              {{ fieldError(field.key) }}
-            </p>
-          </ElFormItem>
-          <ElFormItem v-for="parent in parentFields" :key="parent.key" :label="parent.label">
-            <ElSelect
-              v-if="parent.canView"
-              v-model="draft[parent.key]"
-              :aria-label="parent.label"
-              class="devices__select"
-            >
-              <ElOption
-                v-for="option in parent.options"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value"
+          <FieldRow v-for="field in basicFields" :key="field.key" :label="field.label">
+            <template #default="{ id, labelId }">
+              <NSelect
+                v-if="field.type === 'select'"
+                v-model:value="draft[field.key]"
+                :aria-labelledby="labelId"
+                class="devices__select"
+                :options="[
+                  { label: '海康 ISAPI', value: 'hikvision_isapi' },
+                  { label: '板卡连接器', value: 'board_card' },
+                ]"
               />
-            </ElSelect>
-            <ElInput
-              v-else
-              :id="parent.key"
-              v-model="draft[parent.key]"
-              :name="parent.key.replace('_id', '-id')"
-              autocomplete="off"
-              :readonly="connectorDialogMode === 'edit'"
-            />
-            <p v-if="fieldError(parent.key)" class="devices__field-error" role="alert">
-              {{ fieldError(parent.key) }}
-            </p>
-          </ElFormItem>
+              <NInput
+                v-else
+                v-model:value="draft[field.key]"
+                :input-props="{
+                  id,
+                  name: field.key,
+                  type: field.type,
+                  inputmode: field.key === 'port' ? 'numeric' : undefined,
+                  autocomplete: 'off',
+                }"
+              />
+              <p v-if="fieldError(field.key)" class="devices__field-error" role="alert">
+                {{ fieldError(field.key) }}
+              </p>
+            </template>
+          </FieldRow>
+          <FieldRow v-for="parent in parentFields" :key="parent.key" :label="parent.label">
+            <template #default="{ id, labelId }">
+              <NSelect
+                v-if="parent.canView"
+                v-model:value="draft[parent.key]"
+                :aria-labelledby="labelId"
+                class="devices__select"
+                :options="parent.options"
+              />
+              <NInput
+                v-else
+                v-model:value="draft[parent.key]"
+                :readonly="connectorDialogMode === 'edit'"
+                :input-props="{ id, name: parent.key.replace('_id', '-id'), autocomplete: 'off' }"
+              />
+              <p v-if="fieldError(parent.key)" class="devices__field-error" role="alert">
+                {{ fieldError(parent.key) }}
+              </p>
+            </template>
+          </FieldRow>
         </div>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="connectorDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitConnector">
+      </NForm>
+      <template #action>
+        <NButton @click="connectorDialog = false">取消</NButton>
+        <NButton type="primary" @click="submitConnector">
           {{ connectorDialogMode === 'create' ? '创建' : '保存' }}
-        </ElButton>
+        </NButton>
       </template>
-    </ElDialog>
+    </NModal>
 
-    <ElDialog v-model="detailDialog" title="连接器详情" width="34rem">
+    <NModal
+      v-model:show="detailDialog"
+      preset="dialog"
+      title="连接器详情"
+      :style="{ width: '34rem' }"
+    >
       <p v-if="detailLoading" class="devices__loading">正在加载详情…</p>
       <p v-else-if="detailFailure" class="devices__failure" role="alert">{{ detailFailure }}</p>
       <dl v-else-if="detailConnector" class="devices__details">
@@ -677,7 +679,7 @@ onMounted(load)
           <dd>{{ row.value }}</dd>
         </template>
       </dl>
-    </ElDialog>
+    </NModal>
 
     <CameraMediaPanel :hosts="hosts" />
     <StationTemplateConfiguration :stations="stations" />
@@ -696,7 +698,7 @@ onMounted(load)
 
 .devices__eyebrow {
   margin: 0 0 0.5rem;
-  color: var(--el-color-primary);
+  color: var(--color-primary);
   font-size: 0.8rem;
 }
 
@@ -713,21 +715,21 @@ onMounted(load)
 .devices__empty,
 .devices__form-note {
   margin: 0;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .devices__failure {
   margin: 0 0 1rem;
   padding: 0.65rem 0.9rem;
-  border-left: 3px solid var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .devices__surface {
   overflow: auto;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-bg-color);
+  border: 1px solid var(--color-border-light);
+  background: var(--color-surface);
 }
 
 .devices__direct {
@@ -740,7 +742,7 @@ onMounted(load)
   justify-content: space-between;
   gap: 1rem;
   padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--color-border-light);
 }
 
 .devices__title {
@@ -773,22 +775,22 @@ onMounted(load)
 .devices__table th,
 .devices__table td {
   padding: 0.8rem 1.25rem;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--color-border-light);
   text-align: left;
   vertical-align: middle;
   white-space: nowrap;
 }
 
 .devices__table thead th {
-  background: var(--el-fill-color-lighter);
-  color: var(--el-text-color-secondary);
+  background: var(--color-fill-light);
+  color: var(--color-text-muted);
   font-size: 0.82rem;
   font-weight: 500;
 }
 
 .devices__connector-link {
   padding-left: 0.7rem;
-  border-left: 3px solid var(--el-color-primary);
+  border-left: 3px solid var(--color-primary);
   font-weight: 600;
 }
 
@@ -821,7 +823,7 @@ onMounted(load)
 .devices__field-error {
   width: 100%;
   margin: 0.25rem 0 0;
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .devices__details {
@@ -838,7 +840,7 @@ onMounted(load)
 
 .devices__header :focus-visible,
 .devices__surface :focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 

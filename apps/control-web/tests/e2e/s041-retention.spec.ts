@@ -174,13 +174,15 @@ test('S042 — browser shows the impact estimate, then confirms or cancels a sho
   await expect(defaults.getByText('永久', { exact: true })).toHaveCount(2)
   await expect(effective).toContainText('整组等于全局默认组')
 
-  await panel.getByRole('combobox', { name: '工位保留来源', exact: true }).press('ArrowDown')
-  await page.getByRole('option', { name: '整组自定义', exact: true }).click()
+  // 原生 select：combobox 与 option 语义来自浏览器本身，Playwright 用 selectOption 驱动
+  // （原生下拉的 option 不参与页面点击）。
+  await panel
+    .getByRole('combobox', { name: '工位保留来源', exact: true })
+    .selectOption({ label: '整组自定义' })
   await expect(effective).toContainText('当前模式：整组跟随全局')
   await panel
     .getByRole('combobox', { name: '证据：通过类 保留方式', exact: true })
-    .press('ArrowDown')
-  await page.getByRole('option', { name: '显式不保留', exact: true }).click()
+    .selectOption({ label: '显式不保留' })
 
   // 取消：展示影响估算后取消，既不提交也不改变数据。
   await panel.getByRole('button', { name: '查看影响估算', exact: true }).click()

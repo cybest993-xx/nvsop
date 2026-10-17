@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElButton } from 'element-plus'
+import { NButton } from 'naive-ui'
 import { computed, onUnmounted, ref, watch } from 'vue'
 
 import {
@@ -140,23 +140,23 @@ async function query() {
       <p v-if="command?.failure_code">操作失败：{{ command.failure_code }}。</p>
     </div>
     <div class="compression__actions">
-      <ElButton v-if="pending" :disabled="loading" @click="query">查询命令结果</ElButton>
+      <NButton v-if="pending" :disabled="loading" @click="query">查询命令结果</NButton>
       <template v-if="mayEdit">
-        <ElButton :disabled="loading || pending || !hostId" @click="submit('inspect')"
-          >刷新实际状态</ElButton
+        <NButton :disabled="loading || pending || !hostId" @click="submit('inspect')"
+          >刷新实际状态</NButton
         >
-        <ElButton :disabled="loading || pending || !hostId" @click="submit('pause')"
-          >暂停压缩</ElButton
+        <NButton :disabled="loading || pending || !hostId" @click="submit('pause')"
+          >暂停压缩</NButton
         >
-        <ElButton :disabled="loading || pending || !hostId" @click="submit('resume')"
-          >恢复压缩</ElButton
+        <NButton :disabled="loading || pending || !hostId" @click="submit('resume')"
+          >恢复压缩</NButton
         >
-        <ElButton
-          type="danger"
+        <NButton
+          type="error"
           plain
           :disabled="loading || pending || !hostId"
           @click="submit('abort')"
-          >中止压缩</ElButton
+          >中止压缩</NButton
         >
       </template>
     </div>
@@ -218,9 +218,6 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-}
-.compression__actions .el-button {
-  margin-left: 0;
 }
 .compression__failure {
   color: #b42318;

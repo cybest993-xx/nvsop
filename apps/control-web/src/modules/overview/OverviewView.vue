@@ -329,7 +329,7 @@ onUnmounted(() => {
 
 .overview__facts dt,
 .overview__summary dt {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .overview__facts dd,
@@ -341,7 +341,7 @@ onUnmounted(() => {
 .overview__link {
   display: inline-block;
   margin-bottom: 0.75rem;
-  color: var(--el-color-primary);
+  color: var(--color-primary);
 }
 
 .overview__sections {
@@ -350,7 +350,7 @@ onUnmounted(() => {
 }
 
 .overview__section {
-  border: 1px solid var(--el-border-color-light);
+  border: 1px solid var(--color-border-light);
   border-radius: 0.5rem;
   padding: 1rem;
 }
@@ -369,27 +369,27 @@ onUnmounted(() => {
 }
 
 .overview__section-header span {
-  color: var(--el-color-success);
+  color: var(--color-success);
   font-size: 0.875rem;
 }
 
 .overview__section-header span[data-status='no_data'],
 .overview__section-header span[data-status='partial'],
 .overview__section-header span[data-status='unavailable'] {
-  color: var(--el-color-warning);
+  color: var(--color-warning);
 }
 
 .overview__section-header span[data-status='not_permitted'],
 .overview__section-header span[data-status='unknown'] {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .overview__notice {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .overview__notice--error {
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .overview__events {

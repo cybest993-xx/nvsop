@@ -12,10 +12,8 @@
  * without being read, which is the failure mode that makes snapshots worthless.
  */
 
-import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
 import { createRouter, createWebHistory, type Router } from 'vue-router'
 
 import { flushPromises } from '@vue/test-utils'
@@ -26,6 +24,7 @@ import AppShell from '@/shell/AppShell.vue'
 import LoginView from '@/session/LoginView.vue'
 import TemplateManagement from '@/modules/templates/TemplateManagement.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 // The access page loads its own data on mount. Frozen fixtures, for the same reason the
 // fixtures above are frozen: a snapshot over live data churns without being read.
@@ -201,18 +200,16 @@ vi.mock('@/api/controlPlane', async (importOriginal) => ({
   ),
 }))
 
-// Element Plus seeds its id counter randomly per process, so `el-id-4870-0` running this file
-// alone is `el-id-6572-0` running the whole suite. Left in, the snapshot would fail on how it was
-// invoked. Only the random prefix is dropped: the per-instance suffix stays, so
-// `aria-labelledby="el-id-0"` still has to point at `id="el-id-0"` — the label binding is the fact
-// worth holding, and it remains checkable.
-const GENERATED_ID = /el-id-\d+-(\d+)/g
+// Naive UI's field ids come from Vue's `useId()`, whose counter is per application: every mount
+// in this file starts at `v-0`, so the ids are the same on every run and need no normalization.
+// They stay in the snapshot on purpose — `aria-labelledby="v-1"` has to point at `id="v-1"` and
+// the label's `for` has to point at the control's id; that binding is the fact worth holding.
 // The scoped-style hash changes whenever the component's own `<style>` block does. A CSS edit is
 // not a markup change, and leaving this in would churn the snapshot on one.
 const SCOPE_HASH = / data-v-[0-9a-f]{8}=""/g
 
 function normalize(html: string): string {
-  return html.replace(GENERATED_ID, 'el-id-$1').replace(SCOPE_HASH, '')
+  return html.replace(SCOPE_HASH, '')
 }
 
 const SESSION = {
@@ -245,7 +242,7 @@ describe('the login page', () => {
     await router.push('/login')
     await router.isReady()
 
-    const wrapper = mount(LoginView, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mountWithNaive(LoginView, { global: { plugins: [router] } })
 
     expect(normalize(wrapper.html())).toMatchSnapshot()
   })
@@ -268,7 +265,7 @@ describe('the access page', () => {
       ],
     }
 
-    const wrapper = mount(AccessView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(AccessView)
     await flushPromises()
 
     expect(normalize(wrapper.html())).toMatchSnapshot()
@@ -287,7 +284,7 @@ describe('the device page', () => {
         'device.station.view',
       ],
     }
-    return mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    return mountWithNaive(DevicesView)
   }
 
   it('renders connector configuration with a delegated test control', async () => {
@@ -317,7 +314,7 @@ describe('the template page', () => {
       permissions: ['template.draft.view', 'template.draft.edit'],
     }
 
-    const wrapper = mount(TemplateManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(TemplateManagement)
     await flushPromises()
 
     expect(normalize(wrapper.html())).toMatchSnapshot()
@@ -331,7 +328,7 @@ describe('the protected shell', () => {
     await router.isReady()
     useSessionStore().current = SESSION
 
-    const wrapper = mount(AppShell, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mountWithNaive(AppShell, { global: { plugins: [router] } })
 
     expect(normalize(wrapper.html())).toMatchSnapshot()
   })

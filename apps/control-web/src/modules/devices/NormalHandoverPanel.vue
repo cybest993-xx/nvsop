@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElButton, ElForm, ElFormItem, ElInput, ElOption, ElSelect, ElTag } from 'element-plus'
+import { NButton, NForm, NInput, NSelect, NTag } from 'naive-ui'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   ControlPlaneError,
@@ -14,6 +14,7 @@ import {
   type RuntimePhysicalSafety,
 } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
+import FieldRow from '@/components/FieldRow.vue'
 
 defineProps<{ stations: StationView[]; hosts: InferenceHostView[] }>()
 const session = useSessionStore()
@@ -111,56 +112,49 @@ onUnmounted(() => closeStream?.())
       <h2 id="normal-handover-heading">正常交权</h2>
       <p>旧机停止工位判定与处置、释放点位并确认后，才可授予新机执行权。</p>
     </header>
-    <ElForm class="normal-handover__form" label-position="top" @submit.prevent="create">
-      <ElFormItem
-        v-for="field in fields"
-        :key="field.key"
-        :label="field.label"
-        :for="`normal-${field.key}`"
-      >
-        <ElSelect
-          v-if="field.key === 'station_id' && stations.length"
-          :id="`normal-${field.key}`"
-          v-model="draft[field.key]"
-          :aria-label="field.label"
-        >
-          <ElOption v-for="item in stations" :key="item.id" :label="item.name" :value="item.id" />
-        </ElSelect>
-        <ElSelect
-          v-else-if="field.key !== 'station_id' && hosts.length"
-          :id="`normal-${field.key}`"
-          v-model="draft[field.key]"
-          :aria-label="field.label"
-        >
-          <ElOption v-for="item in hosts" :key="item.id" :label="item.name" :value="item.id" />
-        </ElSelect>
-        <ElInput
-          v-else
-          :id="`normal-${field.key}`"
-          v-model="draft[field.key]"
-          :aria-label="field.label"
-          placeholder="输入已知 ID"
-        />
-      </ElFormItem>
-      <ElButton native-type="submit" type="primary" :disabled="busy || !ready"
-        >请求旧机交权</ElButton
-      >
-    </ElForm>
-    <ElForm
+    <NForm class="normal-handover__form" label-placement="top" @submit.prevent="create">
+      <FieldRow v-for="field in fields" :key="field.key" :label="field.label">
+        <template #default="{ id, labelId }">
+          <NSelect
+            v-if="field.key === 'station_id' && stations.length"
+            v-model:value="draft[field.key]"
+            :aria-labelledby="labelId"
+            :options="stations"
+            label-field="name"
+            value-field="id"
+          />
+          <NSelect
+            v-else-if="field.key !== 'station_id' && hosts.length"
+            v-model:value="draft[field.key]"
+            :aria-labelledby="labelId"
+            :options="hosts"
+            label-field="name"
+            value-field="id"
+          />
+          <NInput
+            v-else
+            v-model:value="draft[field.key]"
+            :input-props="{ id, 'aria-label': field.label, placeholder: '输入已知 ID' }"
+          />
+        </template>
+      </FieldRow>
+      <NButton attr-type="submit" type="primary" :disabled="busy || !ready">请求旧机交权</NButton>
+    </NForm>
+    <NForm
       class="normal-handover__lookup"
       @submit.prevent="attempt(() => readNormalHandover(requestId.trim()))"
     >
-      <ElFormItem label="正常交权请求 ID" for="normal-request-id">
-        <ElInput id="normal-request-id" v-model="requestId" />
-      </ElFormItem>
-      <ElButton native-type="submit" :disabled="busy || !requestId.trim()"
-        >查询 / 刷新交权</ElButton
-      >
-    </ElForm>
+      <FieldRow label="正常交权请求 ID">
+        <template #default="{ id }">
+          <NInput v-model:value="requestId" :input-props="{ id }" />
+        </template>
+      </FieldRow>
+      <NButton attr-type="submit" :disabled="busy || !requestId.trim()">查询 / 刷新交权</NButton>
+    </NForm>
     <article v-if="record" aria-label="正常交权进度">
-      <ElTag
+      <NTag
         :type="record.new_grant_id ? 'success' : record.status === 'pending' ? 'warning' : 'info'"
-        >{{ statusLabel }}</ElTag
+        >{{ statusLabel }}</NTag
       >
       <dl>
         <dt>工位</dt>
@@ -188,18 +182,18 @@ onUnmounted(() => closeStream?.())
       <p v-if="record.status === 'timed_out' || record.status === 'cancelled'">
         该请求不能授予新机；旧机已停写时保持停写。
       </p>
-      <ElButton
+      <NButton
         v-if="record.status === 'confirmed' && !record.new_grant_id"
         type="primary"
         :disabled="busy"
         @click="attempt(() => grantNormalHandover(record!.handover_id))"
-        >授予新机执行权</ElButton
+        >授予新机执行权</NButton
       >
-      <ElButton
+      <NButton
         v-if="record.status === 'pending'"
         :disabled="busy"
         @click="attempt(() => cancelNormalHandover(record!.handover_id))"
-        >取消交权</ElButton
+        >取消交权</NButton
       >
     </article>
     <p v-if="failure" role="alert" class="normal-handover__failure">{{ failure }}</p>
@@ -210,10 +204,10 @@ onUnmounted(() => closeStream?.())
 .normal-handover {
   margin-top: 1.5rem;
   padding-block: 1.25rem;
-  border-top: 1px solid var(--el-border-color);
+  border-top: 1px solid var(--color-border);
 }
 .normal-handover header p {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 .normal-handover__form {
   display: grid;
@@ -245,7 +239,7 @@ onUnmounted(() => closeStream?.())
   overflow-wrap: anywhere;
 }
 .normal-handover__failure {
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 @media (max-width: 900px) {
   .normal-handover__form {

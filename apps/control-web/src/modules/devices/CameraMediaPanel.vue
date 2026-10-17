@@ -1,15 +1,5 @@
 <script setup lang="ts">
-import {
-  ElButton,
-  ElDialog,
-  ElForm,
-  ElFormItem,
-  ElInput,
-  ElMessage,
-  ElOption,
-  ElSelect,
-  ElTag,
-} from 'element-plus'
+import { NButton, NForm, NInput, NModal, NSelect, NTag, useMessage } from 'naive-ui'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import {
@@ -24,6 +14,9 @@ import {
   type InferenceHostView,
 } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
+import FieldRow from '@/components/FieldRow.vue'
+
+const message = useMessage()
 
 const props = defineProps<{ hosts: InferenceHostView[] }>()
 const session = useSessionStore()
@@ -173,10 +166,10 @@ function statusLabel(status: PlayerStatus | undefined): string {
   }
 }
 
-function statusType(status: PlayerStatus | undefined): 'success' | 'warning' | 'danger' | 'info' {
+function statusType(status: PlayerStatus | undefined): 'success' | 'warning' | 'error' | 'info' {
   if (status === 'playing') return 'success'
   if (status === 'first_frame_failed' || status === 'disconnected' || status === 'error') {
-    return 'danger'
+    return 'error'
   }
   if (status === 'autoplay_blocked') return 'warning'
   if (status === 'connecting' || status === 'waiting_first_frame' || status === 'retrying') {
@@ -687,7 +680,7 @@ async function submitCameraEdit(): Promise<void> {
   try {
     await editCamera(camera.camera_id, submitted, camera.camera_revision)
     editCameraDialog.value = false
-    ElMessage.success('相机媒体配置已保存')
+    message.success('相机媒体配置已保存')
     await load()
   } catch (error) {
     recordFailure(error)
@@ -720,7 +713,7 @@ async function submitHostEdit(): Promise<void> {
   try {
     await editInferenceHost(host.id, submitted, host.revision)
     editHostDialog.value = false
-    ElMessage.success('推理机媒体配置已保存')
+    message.success('推理机媒体配置已保存')
     await load()
   } catch (error) {
     recordFailure(error)
@@ -827,7 +820,7 @@ onBeforeUnmount(() => {
           浏览器直连推理机的 MediaMTX；中心只返回稳定 path 和非秘密地址，不代理视频流。
         </p>
       </div>
-      <ElButton v-if="selectedCameraId" @click="showAllCameras">返回多路</ElButton>
+      <NButton v-if="selectedCameraId" @click="showAllCameras">返回多路</NButton>
     </header>
 
     <p v-if="loading" class="media-panel__message">正在加载相机媒体配置…</p>
@@ -863,25 +856,25 @@ onBeforeUnmount(() => {
         </video>
         <div class="media-card__status" aria-live="polite">
           <span>播放：</span>
-          <ElTag :type="statusType(playerStatus[camera.camera_id])" disable-transitions>
+          <NTag :type="statusType(playerStatus[camera.camera_id])" disable-transitions>
             {{ statusLabel(playerStatus[camera.camera_id]) }}
-          </ElTag>
+          </NTag>
           <span>部署实测：未验证</span>
-          <ElButton
+          <NButton
             v-if="playerStatus[camera.camera_id] === 'autoplay_blocked'"
             size="small"
             @click="playVideo(camera.camera_id)"
-            >播放</ElButton
+            >播放</NButton
           >
           <span v-if="playerFailure[camera.camera_id]" class="media-card__error">
             {{ playerFailure[camera.camera_id] }}
           </span>
         </div>
         <div class="media-card__actions">
-          <ElButton type="primary" @click="startPreview(camera)">开始预览</ElButton>
-          <ElButton @click="stopCamera(camera.camera_id)">停止</ElButton>
-          <ElButton @click="selectCamera(camera.camera_id)">详情</ElButton>
-          <ElButton v-if="mayEditCameras" @click="openCameraEdit(camera)">编辑媒体策略</ElButton>
+          <NButton type="primary" @click="startPreview(camera)">开始预览</NButton>
+          <NButton @click="stopCamera(camera.camera_id)">停止</NButton>
+          <NButton @click="selectCamera(camera.camera_id)">详情</NButton>
+          <NButton v-if="mayEditCameras" @click="openCameraEdit(camera)">编辑媒体策略</NButton>
         </div>
         <div class="media-card__direct">
           <span>WebRTC：{{ camera.mediamtx_address ?? '未配置' }}</span>
@@ -908,7 +901,7 @@ onBeforeUnmount(() => {
                 type="datetime-local"
               />
             </label>
-            <ElButton @click="queryPlayback(camera)">查询片段</ElButton>
+            <NButton @click="queryPlayback(camera)">查询片段</NButton>
           </div>
           <p v-if="playbackFailure[camera.camera_id]" class="media-card__error">
             {{ playbackFailure[camera.camera_id] }}
@@ -921,14 +914,14 @@ onBeforeUnmount(() => {
               v-for="interval in intervals[camera.camera_id]"
               :key="`${interval.start}-${interval.end}`"
             >
-              <ElButton
+              <NButton
                 link
                 type="primary"
                 :aria-label="`${camera.camera_name}播放${formatShanghai(interval.start)}至${formatShanghai(interval.end)}`"
                 @click="setPlaybackInterval(camera, interval)"
               >
                 {{ formatShanghai(interval.start) }} – {{ formatShanghai(interval.end) }}
-              </ElButton>
+              </NButton>
             </li>
           </ul>
           <p v-else class="media-card__meta">暂无可用片段；可能已过录像窗口或存在时间空洞。</p>
@@ -975,13 +968,13 @@ onBeforeUnmount(() => {
             <td>{{ host.mediamtx_playback_address ?? '未配置' }}</td>
             <td>{{ host.recording_window_seconds }}</td>
             <td class="media-hosts__actions">
-              <ElButton link type="primary" @click="openHostEdit(host)">编辑</ElButton>
-              <ElButton
+              <NButton link type="primary" @click="openHostEdit(host)">编辑</NButton>
+              <NButton
                 link
                 type="primary"
                 :loading="exportLoading === host.id"
                 @click="exportHost(host)"
-                >导出本机配置</ElButton
+                >导出本机配置</NButton
               >
             </td>
           </tr>
@@ -989,44 +982,89 @@ onBeforeUnmount(() => {
       </table>
     </div>
 
-    <ElDialog v-model="editCameraDialog" title="编辑相机媒体策略" width="38rem">
-      <ElForm label-position="top" @submit.prevent="submitCameraEdit">
-        <ElFormItem label="相机名称"><ElInput v-model="cameraDraft.name" /></ElFormItem>
+    <NModal
+      v-model:show="editCameraDialog"
+      preset="dialog"
+      title="编辑相机媒体策略"
+      :style="{ width: '38rem' }"
+    >
+      <NForm label-placement="top" @submit.prevent="submitCameraEdit">
+        <FieldRow label="相机名称">
+          <template #default="{ id }">
+            <NInput v-model:value="cameraDraft.name" :input-props="{ id }" />
+          </template>
+        </FieldRow>
         <div class="media-form-grid">
-          <ElFormItem label="媒体路径">
-            <ElSelect v-model="cameraDraft.media_path_mode" class="media-form-grid__full">
-              <ElOption label="零转码（passthrough）" value="passthrough" />
-              <ElOption label="CPU 转码" value="cpu_transcode" />
-            </ElSelect>
-          </ElFormItem>
-          <ElFormItem label="录像模式">
-            <ElSelect v-model="cameraDraft.recording_mode" class="media-form-grid__full">
-              <ElOption label="仅预览" value="preview_only" />
-              <ElOption label="连续录像" value="continuous" />
-            </ElSelect>
-          </ElFormItem>
+          <FieldRow label="媒体路径">
+            <template #default="{ labelId }">
+              <NSelect
+                v-model:value="cameraDraft.media_path_mode"
+                :aria-labelledby="labelId"
+                class="media-form-grid__full"
+                :options="[
+                  { label: '零转码（passthrough）', value: 'passthrough' },
+                  { label: 'CPU 转码', value: 'cpu_transcode' },
+                ]"
+              />
+            </template>
+          </FieldRow>
+          <FieldRow label="录像模式">
+            <template #default="{ labelId }">
+              <NSelect
+                v-model:value="cameraDraft.recording_mode"
+                :aria-labelledby="labelId"
+                class="media-form-grid__full"
+                :options="[
+                  { label: '仅预览', value: 'preview_only' },
+                  { label: '连续录像', value: 'continuous' },
+                ]"
+              />
+            </template>
+          </FieldRow>
         </div>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="editCameraDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitCameraEdit">保存</ElButton>
+      </NForm>
+      <template #action>
+        <NButton @click="editCameraDialog = false">取消</NButton>
+        <NButton type="primary" @click="submitCameraEdit">保存</NButton>
       </template>
-    </ElDialog>
+    </NModal>
 
-    <ElDialog v-model="editHostDialog" title="编辑推理机媒体配置" width="40rem">
-      <ElForm label-position="top" @submit.prevent="submitHostEdit">
+    <NModal
+      v-model:show="editHostDialog"
+      preset="dialog"
+      title="编辑推理机媒体配置"
+      :style="{ width: '40rem' }"
+    >
+      <NForm label-placement="top" @submit.prevent="submitHostEdit">
         <div class="media-form-grid">
-          <ElFormItem label="名称"><ElInput v-model="hostDraft.name" /></ElFormItem>
-          <ElFormItem label="推理机地址"><ElInput v-model="hostDraft.address" /></ElFormItem>
-          <ElFormItem label="WebRTC 直连地址"
-            ><ElInput v-model="hostDraft.mediamtx_address"
-          /></ElFormItem>
-          <ElFormItem label="原生回放地址"
-            ><ElInput v-model="hostDraft.mediamtx_playback_address"
-          /></ElFormItem>
-          <ElFormItem label="录像窗口（秒）"
-            ><ElInput v-model="hostDraft.recording_window_seconds" type="number"
-          /></ElFormItem>
+          <FieldRow label="名称">
+            <template #default="{ id }">
+              <NInput v-model:value="hostDraft.name" :input-props="{ id }" />
+            </template>
+          </FieldRow>
+          <FieldRow label="推理机地址">
+            <template #default="{ id }">
+              <NInput v-model:value="hostDraft.address" :input-props="{ id }" />
+            </template>
+          </FieldRow>
+          <FieldRow label="WebRTC 直连地址">
+            <template #default="{ id }">
+              <NInput v-model:value="hostDraft.mediamtx_address" :input-props="{ id }" />
+            </template>
+          </FieldRow>
+          <FieldRow label="原生回放地址">
+            <template #default="{ id }">
+              <NInput v-model:value="hostDraft.mediamtx_playback_address" :input-props="{ id }" />
+            </template>
+          </FieldRow>
+          <FieldRow label="录像窗口（秒）">
+            <template #default="{ id }">
+              <NInput
+                v-model:value="hostDraft.recording_window_seconds"
+                :input-props="{ id, type: 'number' }"
+              />
+            </template>
+          </FieldRow>
           <p
             v-if="
               editingHost &&
@@ -1036,16 +1074,21 @@ onBeforeUnmount(() => {
           >
             缩短窗口前必须在推理机本地根据实际分段生成影响快照并明确确认；本次中心保存不会伪造已应用状态。
           </p>
-          <ElFormItem label="磁盘水位（百分比）"
-            ><ElInput v-model="hostDraft.disk_watermark_percent" type="number"
-          /></ElFormItem>
+          <FieldRow label="磁盘水位（百分比）">
+            <template #default="{ id }">
+              <NInput
+                v-model:value="hostDraft.disk_watermark_percent"
+                :input-props="{ id, type: 'number' }"
+              />
+            </template>
+          </FieldRow>
         </div>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="editHostDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitHostEdit">保存</ElButton>
+      </NForm>
+      <template #action>
+        <NButton @click="editHostDialog = false">取消</NButton>
+        <NButton type="primary" @click="submitHostEdit">保存</NButton>
       </template>
-    </ElDialog>
+    </NModal>
   </section>
 </template>
 
@@ -1053,8 +1096,8 @@ onBeforeUnmount(() => {
 .media-panel {
   margin-top: 2rem;
   padding: 1.25rem;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-bg-color);
+  border: 1px solid var(--color-border-light);
+  background: var(--color-surface);
 }
 
 .media-panel__header,
@@ -1068,7 +1111,7 @@ onBeforeUnmount(() => {
 
 .media-panel__eyebrow {
   margin: 0 0 0.35rem;
-  color: var(--el-color-primary);
+  color: var(--color-primary);
   font-size: 0.8rem;
 }
 
@@ -1081,18 +1124,18 @@ onBeforeUnmount(() => {
 .media-panel__intro,
 .media-panel__message,
 .media-card__meta {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .media-panel__failure,
 .media-card__error {
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .media-panel__warning {
   grid-column: 1 / -1;
   margin: 0;
-  color: var(--el-color-warning-dark-2);
+  color: var(--color-warning-strong);
 }
 
 .media-panel__grid {
@@ -1105,11 +1148,11 @@ onBeforeUnmount(() => {
 .media-card {
   min-width: 0;
   padding: 1rem;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--color-border-light);
 }
 
 .media-card__mode {
-  color: var(--el-color-primary);
+  color: var(--color-primary);
   font-size: 0.8rem;
   white-space: nowrap;
 }
@@ -1138,7 +1181,7 @@ onBeforeUnmount(() => {
 .media-card__direct {
   flex-direction: column;
   align-items: flex-start;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
@@ -1146,7 +1189,7 @@ onBeforeUnmount(() => {
 .media-card__playback {
   margin-top: 1rem;
   padding-top: 0.85rem;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--color-border-light);
 }
 
 .media-card__playback h4 {
@@ -1156,21 +1199,21 @@ onBeforeUnmount(() => {
 .media-card__range label {
   display: grid;
   gap: 0.2rem;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
   font-size: 0.8rem;
 }
 
 .media-card__range input {
   min-width: 12rem;
   padding: 0.35rem;
-  border: 1px solid var(--el-border-color);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
 }
 
 .media-card__intervals {
   margin: 0.75rem 0 0;
   padding-left: 1.25rem;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
   font-size: 0.85rem;
 }
 
@@ -1189,7 +1232,7 @@ onBeforeUnmount(() => {
 .media-hosts__table th,
 .media-hosts__table td {
   padding: 0.65rem;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--color-border-light);
   text-align: left;
   overflow-wrap: anywhere;
 }
@@ -1229,7 +1272,7 @@ onBeforeUnmount(() => {
 }
 
 .media-panel :focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 </style>

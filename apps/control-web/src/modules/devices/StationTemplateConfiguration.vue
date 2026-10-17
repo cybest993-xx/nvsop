@@ -1,17 +1,15 @@
 <script setup lang="ts">
 import {
-  ElButton,
-  ElDialog,
-  ElForm,
-  ElFormItem,
-  ElInput,
-  ElMessage,
-  ElOption,
-  ElRadio,
-  ElRadioGroup,
-  ElSelect,
-  ElTag,
-} from 'element-plus'
+  NButton,
+  NForm,
+  NInput,
+  NModal,
+  NRadio,
+  NRadioGroup,
+  NSelect,
+  NTag,
+  useMessage,
+} from 'naive-ui'
 import { computed, reactive, ref, watch } from 'vue'
 
 import {
@@ -33,6 +31,9 @@ import {
   type TemplateVersionView,
 } from '@/api/controlPlane'
 import { useSessionStore } from '@/session/store'
+import FieldRow from '@/components/FieldRow.vue'
+
+const message = useMessage()
 
 interface RuntimeDraft {
   idle_timeout_seconds: string
@@ -370,7 +371,7 @@ async function bind(): Promise<void> {
       stationRevision: updated.station_revision,
       configuration: updated,
     }
-    ElMessage.success('工位模板期望配置已保存')
+    message.success('工位模板期望配置已保存')
     dialogVisible.value = false
   } catch (error) {
     recordFailure(error)
@@ -412,7 +413,7 @@ async function saveRuntimeParameters(): Promise<void> {
     resetRuntimeDraft(updated)
     preview.value = null
     previewKey.value = ''
-    ElMessage.success('工位运行参数已保存')
+    message.success('工位运行参数已保存')
   } catch (error) {
     recordFailure(error)
     if (error instanceof ControlPlaneError && error.status === 409) {
@@ -462,14 +463,14 @@ function statusLabel(status: string): string {
   }
 }
 
-function statusTag(status: string): 'success' | 'danger' | 'warning' | 'info' {
+function statusTag(status: string): 'success' | 'error' | 'warning' | 'info' {
   switch (status) {
     case 'confirmed':
       return 'success'
     case 'digest_mismatch':
     case 'rejected':
     case 'topology_invalid':
-      return 'danger'
+      return 'error'
     case 'waiting':
     case 'not_confirmed':
       return 'warning'
@@ -541,23 +542,38 @@ watch(
       <h3 id="known-station-heading">按已知工位操作</h3>
       <p>当前没有工位查看权限。不会读取工位列表或配置，请使用已知工位 ID、修订号和版本 ID。</p>
       <div class="station-template__direct-fields">
-        <ElFormItem label="工位 ID">
-          <ElInput v-model="knownStationId" name="known-station-id" autocomplete="off" />
-        </ElFormItem>
-        <ElFormItem label="工位修订号">
-          <ElInput
-            v-model="knownStationRevision"
-            name="known-station-revision"
-            type="number"
-            inputmode="numeric"
-            autocomplete="off"
-          />
-        </ElFormItem>
-        <ElFormItem label="模板版本 ID">
-          <ElInput v-model="knownVersionId" name="known-template-version-id" autocomplete="off" />
-        </ElFormItem>
+        <FieldRow label="工位 ID">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="knownStationId"
+              :input-props="{ id, name: 'known-station-id', autocomplete: 'off' }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="工位修订号">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="knownStationRevision"
+              :input-props="{
+                id,
+                name: 'known-station-revision',
+                type: 'number',
+                inputmode: 'numeric',
+                autocomplete: 'off',
+              }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="模板版本 ID">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="knownVersionId"
+              :input-props="{ id, name: 'known-template-version-id', autocomplete: 'off' }"
+            />
+          </template>
+        </FieldRow>
       </div>
-      <ElButton type="primary" @click="openKnownStation">打开配置</ElButton>
+      <NButton type="primary" @click="openKnownStation">打开配置</NButton>
     </div>
 
     <div v-else-if="mayViewStations" class="station-template__surface">
@@ -584,12 +600,9 @@ watch(
             </th>
             <td>
               <template v-if="configurations.get(station.id)">
-                <ElTag
-                  :type="statusTag(configurations.get(station.id)!.status)"
-                  disable-transitions
-                >
+                <NTag :type="statusTag(configurations.get(station.id)!.status)" disable-transitions>
                   {{ statusLabel(configurations.get(station.id)!.status) }}
-                </ElTag>
+                </NTag>
                 <small v-if="configurations.get(station.id)!.status_detail">
                   {{ configurations.get(station.id)!.status_detail }}
                 </small>
@@ -645,15 +658,15 @@ watch(
               </small>
             </td>
             <td class="station-template__actions">
-              <ElButton link type="primary" @click="openStation(station, false)">查看配置</ElButton>
-              <ElButton
+              <NButton link type="primary" @click="openStation(station, false)">查看配置</NButton>
+              <NButton
                 v-if="mayEditStations"
                 link
                 type="primary"
                 @click="openStation(station, true)"
               >
                 绑定 / 编辑
-              </ElButton>
+              </NButton>
             </td>
           </tr>
           <tr v-if="props.stations.length === 0">
@@ -665,86 +678,105 @@ watch(
 
     <p v-else class="station-template__empty-state">当前没有工位模板查看权限。</p>
 
-    <ElDialog v-model="dialogVisible" title="工位模板与运行参数" width="52rem">
+    <NModal
+      v-model:show="dialogVisible"
+      preset="dialog"
+      title="工位模板与运行参数"
+      :style="{ width: '52rem' }"
+    >
       <div v-if="target" class="station-template__dialog">
         <p class="station-template__dialog-note">
           {{ target.label }} · If-Match 工位修订
           {{ target.stationRevision }}。正式绑定会再次读取并校验当前拓扑。
         </p>
-        <ElForm label-position="top" @submit.prevent="previewBinding">
-          <ElFormItem label="不可变模板版本">
-            <ElSelect
-              v-if="mayViewVersions"
-              v-model="versionId"
-              class="station-template__select"
-              :loading="versionsLoading"
-              filterable
-              placeholder="选择已发布版本"
-            >
-              <ElOption
-                v-for="version in versions"
-                :key="version.id"
-                :label="`${version.id} · ${version.sha256.slice(0, 12)}`"
-                :value="version.id"
+        <NForm label-placement="top" @submit.prevent="previewBinding">
+          <FieldRow label="不可变模板版本">
+            <template #default="{ id }">
+              <NSelect
+                v-if="mayViewVersions"
+                v-model:value="versionId"
+                :input-props="{ id }"
+                class="station-template__select"
+                :loading="versionsLoading"
+                filterable
+                placeholder="选择已发布版本"
+                :options="
+                  versions.map((version) => ({
+                    label: `${version.id} · ${version.sha256.slice(0, 12)}`,
+                    value: version.id,
+                  }))
+                "
               />
-            </ElSelect>
-            <ElInput
-              v-else
-              v-model="versionId"
-              name="known-template-version-id-dialog"
-              autocomplete="off"
-              placeholder="输入已知模板版本 ID"
-            />
-            <p v-if="fieldError('version_id')" class="station-template__field-error" role="alert">
-              {{ fieldError('version_id') }}
-            </p>
-          </ElFormItem>
+              <NInput
+                v-else
+                v-model:value="versionId"
+                placeholder="输入已知模板版本 ID"
+                :input-props="{ id, name: 'known-template-version-id-dialog', autocomplete: 'off' }"
+              />
+              <p v-if="fieldError('version_id')" class="station-template__field-error" role="alert">
+                {{ fieldError('version_id') }}
+              </p>
+            </template>
+          </FieldRow>
 
-          <ElFormItem label="运行参数来源">
-            <ElRadioGroup
-              v-model="runtimeMode"
-              name="runtime-parameter-mode"
-              @change="markRuntimeParametersEdited"
-            >
-              <ElRadio value="follow_template">跟随模板默认值</ElRadio>
-              <ElRadio value="custom">工位自定义</ElRadio>
-            </ElRadioGroup>
-          </ElFormItem>
+          <FieldRow label="运行参数来源">
+            <template #default="{ labelId }">
+              <NRadioGroup
+                v-model:value="runtimeMode"
+                :aria-labelledby="labelId"
+                @change="markRuntimeParametersEdited"
+              >
+                <NRadio value="follow_template">跟随模板默认值</NRadio>
+                <NRadio value="custom">工位自定义</NRadio>
+              </NRadioGroup>
+            </template>
+          </FieldRow>
 
           <div class="station-template__runtime-grid">
-            <ElFormItem label="空闲时限（秒）">
-              <ElInput
-                v-model="runtimeDraft.idle_timeout_seconds"
-                name="idle-timeout-seconds"
-                type="number"
-                inputmode="decimal"
-                :disabled="runtimeMode !== 'custom'"
-              />
-            </ElFormItem>
-            <ElFormItem label="步骤时限（秒）">
-              <ElInput
-                v-model="runtimeDraft.step_deadline_seconds"
-                name="step-deadline-seconds"
-                type="number"
-                inputmode="decimal"
-                :disabled="runtimeMode !== 'custom'"
-              />
-            </ElFormItem>
-            <ElFormItem label="处置策略">
-              <ElInput
-                v-model="runtimeDraft.disposition_policy"
-                name="disposition-policy"
-                autocomplete="off"
-                :disabled="runtimeMode !== 'custom'"
-              />
-            </ElFormItem>
+            <FieldRow label="空闲时限（秒）">
+              <template #default="{ id }">
+                <NInput
+                  v-model:value="runtimeDraft.idle_timeout_seconds"
+                  :disabled="runtimeMode !== 'custom'"
+                  :input-props="{
+                    id,
+                    name: 'idle-timeout-seconds',
+                    type: 'number',
+                    inputmode: 'decimal',
+                  }"
+                />
+              </template>
+            </FieldRow>
+            <FieldRow label="步骤时限（秒）">
+              <template #default="{ id }">
+                <NInput
+                  v-model:value="runtimeDraft.step_deadline_seconds"
+                  :disabled="runtimeMode !== 'custom'"
+                  :input-props="{
+                    id,
+                    name: 'step-deadline-seconds',
+                    type: 'number',
+                    inputmode: 'decimal',
+                  }"
+                />
+              </template>
+            </FieldRow>
+            <FieldRow label="处置策略">
+              <template #default="{ id }">
+                <NInput
+                  v-model:value="runtimeDraft.disposition_policy"
+                  :disabled="runtimeMode !== 'custom'"
+                  :input-props="{ id, name: 'disposition-policy', autocomplete: 'off' }"
+                />
+              </template>
+            </FieldRow>
           </div>
           <p v-if="fieldErrors.length" class="station-template__field-errors" role="alert">
             <span v-for="error in fieldErrors" :key="`${error.field}:${error.message}`">
               {{ error.field }}：{{ error.message }}
             </span>
           </p>
-        </ElForm>
+        </NForm>
 
         <section
           v-if="preview"
@@ -753,9 +785,9 @@ watch(
         >
           <div class="station-template__preview-head">
             <h3 id="binding-preview-heading">绑定预检</h3>
-            <ElTag :type="preview.accepted ? 'success' : 'danger'" disable-transitions>
+            <NTag :type="preview.accepted ? 'success' : 'error'" disable-transitions>
               {{ preview.accepted ? '可以提交' : '不能提交' }}
-            </ElTag>
+            </NTag>
           </div>
           <ul v-if="preview.reasons.length" class="station-template__issues">
             <li v-for="reason in preview.reasons" :key="`${reason.code}:${reason.field}`">
@@ -765,25 +797,25 @@ watch(
           <p v-else class="station-template__muted">当前版本、边界、拓扑和运行参数均通过预检。</p>
         </section>
       </div>
-      <template #footer>
-        <ElButton @click="dialogVisible = false">关闭</ElButton>
-        <ElButton
+      <template #action>
+        <NButton @click="dialogVisible = false">关闭</NButton>
+        <NButton
           v-if="mayEditStations && !target?.preserveRuntimeParameters"
           :loading="busyAction === 'runtime'"
           :disabled="busyAction !== ''"
           @click="saveRuntimeParameters"
         >
           仅保存运行参数
-        </ElButton>
-        <ElButton
+        </NButton>
+        <NButton
           v-if="mayEditStations"
           :loading="busyAction === 'preview'"
           :disabled="busyAction !== ''"
           @click="previewBinding"
         >
           预检绑定
-        </ElButton>
-        <ElButton
+        </NButton>
+        <NButton
           v-if="mayEditStations"
           type="primary"
           :loading="busyAction === 'bind'"
@@ -795,9 +827,9 @@ watch(
           @click="bind"
         >
           正式绑定
-        </ElButton>
+        </NButton>
       </template>
-    </ElDialog>
+    </NModal>
   </section>
 </template>
 
@@ -812,7 +844,7 @@ watch(
 
 .station-template__eyebrow {
   margin: 0 0 0.35rem;
-  color: var(--el-color-primary);
+  color: var(--color-primary);
   font-size: 0.8rem;
 }
 
@@ -828,23 +860,23 @@ watch(
 .station-template__direct p,
 .station-template__dialog-note {
   margin: 0;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
   line-height: 1.5;
 }
 
 .station-template__failure {
   margin: 0 0 0.8rem;
   padding: 0.65rem 0.9rem;
-  border-left: 3px solid var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .station-template__surface,
 .station-template__direct {
   overflow: auto;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-bg-color);
+  border: 1px solid var(--color-border-light);
+  background: var(--color-surface);
 }
 
 .station-template__direct {
@@ -882,14 +914,14 @@ watch(
 .station-template__table th,
 .station-template__table td {
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--color-border-light);
   text-align: left;
   vertical-align: top;
 }
 
 .station-template__table thead th {
-  background: var(--el-fill-color-lighter);
-  color: var(--el-text-color-secondary);
+  background: var(--color-fill-light);
+  color: var(--color-text-muted);
   font-size: 0.82rem;
   font-weight: 500;
 }
@@ -903,7 +935,7 @@ watch(
 .station-template__table th[scope='row'] small,
 .station-template__table td small {
   margin-top: 0.25rem;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
   font-weight: 400;
 }
 
@@ -942,7 +974,7 @@ watch(
 .station-template__empty {
   padding: 2rem 1rem;
   text-align: center;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .station-template__dialog {
@@ -952,8 +984,8 @@ watch(
 
 .station-template__dialog-note {
   padding: 0.7rem 0.85rem;
-  border-left: 3px solid var(--el-color-warning);
-  background: var(--el-color-warning-light-9);
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-warning-subtle);
 }
 
 .station-template__select {
@@ -969,7 +1001,7 @@ watch(
 .station-template__field-error,
 .station-template__field-errors {
   margin: 0.25rem 0 0;
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .station-template__field-errors {
@@ -979,8 +1011,8 @@ watch(
 
 .station-template__preview {
   padding: 0.9rem 1rem;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--color-border-light);
+  background: var(--color-fill-light);
 }
 
 .station-template__preview-head {
@@ -996,7 +1028,7 @@ watch(
 }
 
 .station-template :focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 

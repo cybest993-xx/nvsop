@@ -5,15 +5,15 @@
  * 已知码显示核心提示；未知码显示原始码 + 通用排障提示，且不丢该条结论的其余字段。
  */
 
-import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory, type Router } from 'vue-router'
 
 import StationRuntimePanel from '@/modules/devices/StationRuntimePanel.vue'
 import OverviewView from '@/modules/overview/OverviewView.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const GENERIC_ADVICE = '请查阅版本说明或联系管理员'
 
@@ -129,9 +129,8 @@ describe('工位运行镜像的原因码', () => {
     }
     const snapshot = { ...STATION_PROJECTION, health: [fact] }
     const send = installEventSource([{ type: 'runtime', data: JSON.stringify(snapshot) }])
-    const wrapper = mount(StationRuntimePanel, {
+    const wrapper = mountWithNaive(StationRuntimePanel, {
       props: { stations: [] },
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
     expect(wrapper.text()).toContain('证据目录')
@@ -173,9 +172,8 @@ describe('工位运行镜像的原因码', () => {
     })
     installEventSource([{ type: 'runtime', data: JSON.stringify(STATION_PROJECTION) }])
 
-    const wrapper = mount(StationRuntimePanel, {
+    const wrapper = mountWithNaive(StationRuntimePanel, {
       props: { stations: [] },
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
     await vi.waitFor(() => expect(wrapper.text()).toContain('WRONG_STEP — 出现了错误步骤'))
@@ -215,7 +213,7 @@ describe('概览实时上报的原因码', () => {
     const router = testRouter()
     await router.push('/')
     await router.isReady()
-    const wrapper = mount(OverviewView, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mountWithNaive(OverviewView, { global: { plugins: [router] } })
     await flushPromises()
     await vi.waitFor(() => expect(wrapper.text()).toContain('WRONG_STEP — 出现了错误步骤'))
 

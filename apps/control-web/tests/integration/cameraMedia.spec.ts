@@ -1,12 +1,12 @@
-import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, type VueWrapper } from '@vue/test-utils'
 
 import DevicesView from '@/modules/devices/DevicesView.vue'
 import { useSessionStore } from '@/session/store'
 
 import { cameraMedia } from '../support/cameraMedia'
+import { mountWithNaive } from '../support/naive'
 
 /**
  * 集成层在浏览器原生 adapter seam（`RTCPeerConnection` / `fetch` / `HTMLMediaElement`）上用确定性
@@ -246,7 +246,7 @@ async function emitLoadedData(
 }
 
 async function mountDevices(): Promise<VueWrapper> {
-  const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+  const wrapper = mountWithNaive(DevicesView)
   await flushPromises()
   return wrapper
 }

@@ -18,6 +18,9 @@ import type {
   CancelNormalHandoverData,
   CancelNormalHandoverErrors,
   CancelNormalHandoverResponses,
+  CancelPendingDatasetAugmentationData,
+  CancelPendingDatasetAugmentationErrors,
+  CancelPendingDatasetAugmentationResponses,
   CancelVlmTrainingCommandData,
   CancelVlmTrainingCommandErrors,
   CancelVlmTrainingCommandResponses,
@@ -204,6 +207,9 @@ import type {
   ListDatasetArtifactsData,
   ListDatasetArtifactsErrors,
   ListDatasetArtifactsResponses,
+  ListDatasetAugmentationsData,
+  ListDatasetAugmentationsErrors,
+  ListDatasetAugmentationsResponses,
   ListDatasetMembersData,
   ListDatasetMembersErrors,
   ListDatasetMembersResponses,
@@ -294,6 +300,9 @@ import type {
   ReadDatasetArtifactData,
   ReadDatasetArtifactErrors,
   ReadDatasetArtifactResponses,
+  ReadDatasetAugmentationData,
+  ReadDatasetAugmentationErrors,
+  ReadDatasetAugmentationResponses,
   ReadDatasetMemberData,
   ReadDatasetMemberErrors,
   ReadDatasetMemberResponses,
@@ -426,6 +435,9 @@ import type {
   RequestDatasetArtifactData,
   RequestDatasetArtifactErrors,
   RequestDatasetArtifactResponses,
+  RequestDatasetAugmentationData,
+  RequestDatasetAugmentationErrors,
+  RequestDatasetAugmentationResponses,
   RequestDatasetUsageCheckData,
   RequestDatasetUsageCheckErrors,
   RequestDatasetUsageCheckResponses,
@@ -2866,6 +2878,75 @@ export const downloadDatasetArtifact = <ThrowOnError extends boolean = false>(
     DownloadDatasetArtifactErrors,
     ThrowOnError
   >({ url: '/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}/download', ...options })
+
+/**
+ * List Dataset Augmentations
+ */
+export const listDatasetAugmentations = <ThrowOnError extends boolean = false>(
+  options: Options<ListDatasetAugmentationsData, ThrowOnError>,
+): RequestResult<ListDatasetAugmentationsResponses, ListDatasetAugmentationsErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListDatasetAugmentationsResponses,
+    ListDatasetAugmentationsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands', ...options })
+
+/**
+ * Request Dataset Augmentation
+ */
+export const requestDatasetAugmentation = <ThrowOnError extends boolean = false>(
+  options: Options<RequestDatasetAugmentationData, ThrowOnError>,
+): RequestResult<
+  RequestDatasetAugmentationResponses,
+  RequestDatasetAugmentationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RequestDatasetAugmentationResponses,
+    RequestDatasetAugmentationErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Dataset Augmentation
+ */
+export const readDatasetAugmentation = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDatasetAugmentationData, ThrowOnError>,
+): RequestResult<ReadDatasetAugmentationResponses, ReadDatasetAugmentationErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDatasetAugmentationResponses,
+    ReadDatasetAugmentationErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}',
+    ...options,
+  })
+
+/**
+ * Cancel Pending Dataset Augmentation
+ */
+export const cancelPendingDatasetAugmentation = <ThrowOnError extends boolean = false>(
+  options: Options<CancelPendingDatasetAugmentationData, ThrowOnError>,
+): RequestResult<
+  CancelPendingDatasetAugmentationResponses,
+  CancelPendingDatasetAugmentationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CancelPendingDatasetAugmentationResponses,
+    CancelPendingDatasetAugmentationErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}/cancel',
+    ...options,
+  })
 
 /**
  * List The Ddm Training Commands

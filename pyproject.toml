@@ -41,6 +41,10 @@ dev = [
     "mypy==1.18.2",
     "import-linter==2.3",
     "pytest==8.4.2",
+    # `make check` runs the Center suites across workers (pytest-xdist); test-only and pure
+    # Python. Container-backed suites group by file so a module's fixed ports and fixtures
+    # stay on one worker; the Makefile decides per suite how many workers are safe.
+    "pytest-xdist==3.8.0",
     # starlette 1.6's TestClient runs on httpx2; the older httpx raises a deprecation
     # warning on import. Test-only — the application itself makes no outbound HTTP call yet.
     "httpx2==2.12.0",

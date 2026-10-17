@@ -91,6 +91,11 @@ class MakeWorkflowTest(unittest.TestCase):
                 for name in [*PREPARATION, *CHECKS, "center-integration", "center-system"]
             )
             (root / "Makefile").write_text((ROOT / "Makefile").read_text() + "\n" + stubs)
+            # Makefile 的并发钳制变量按仓库路径展开该脚本；临时工作区必须提供同一文件。
+            (root / "scripts").mkdir()
+            (root / "scripts" / "concurrency_limit.py").write_text(
+                (ROOT / "scripts" / "concurrency_limit.py").read_text()
+            )
             (root / "probe.py").write_text(PROBE)
             result = subprocess.run(
                 ["make", "--jobs=2", target, f"CHECK_JOBS={jobs}"],

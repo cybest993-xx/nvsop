@@ -216,6 +216,7 @@ def _confirmed_station(
         template_sha256=configured.template.version_sha256,
         model_ids=configured.model_ids,
         disposition_policy=configured.runtime_parameters.disposition_policy,
+        retention_policy=configured.retention,
     )
     connector_ids = tuple(connector.connector_id for connector in configured.connectors)
     input_points: list[tuple[str, InputPoint]] = []
@@ -296,6 +297,7 @@ def _same_sop_view(left: StationRuntimeConfiguration, right: StationRuntimeConfi
         and left.template_version_id == right.template_version_id
         and left.template_sha256 == right.template_sha256
         and left.disposition_policy == right.disposition_policy
+        and left.retention_policy == right.retention_policy
     )
 
 

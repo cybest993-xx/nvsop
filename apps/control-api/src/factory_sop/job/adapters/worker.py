@@ -32,12 +32,16 @@ from factory_sop.dataset.api import (
     ArtifactExecutionResult,
     DatasetAnnotationRuntime,
     DatasetArtifactExecutor,
+    DatasetCommandExecutor,
     DatasetRefusedError,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
     MediaProbeUnavailableError,
     MemberStatus,
     ObjectStorageUnavailableError,
+    TrainingJobExecutor,
+    TrainingJobOutcome,
+    TrainingJobResult,
     UsageCheckStatus,
     UsageCheckTarget,
     UsageKind,
@@ -780,6 +784,91 @@ async def generate_dataset_artifact_job(ctx: Mapping[str, Any], job_id: str) -> 
     await _run_blocking_job(_generate_dataset_artifact_job, ctx, job_id)
 
 
+async def augment_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """在既有 worker 中推进增强；恢复投递不授权重发非幂等上游操作。"""
+    await _run_blocking_job(_generate_dataset_artifact_job, ctx, job_id)
+
+
+async def dispatch_ddm_training_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """隔离同步 DDM 训练命令推进，不阻塞 ARQ 事件循环。"""
+    await _run_blocking_job(_dispatch_ddm_training_job, ctx, job_id)
+
+
+async def dispatch_vlm_training_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """隔离同步 VLM 训练命令推进，不阻塞 ARQ 事件循环。"""
+    await _run_blocking_job(_dispatch_vlm_training_job, ctx, job_id)
+
+
+def _dispatch_ddm_training_job(ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence) -> None:
+    _dispatch_training_job(ctx, job_id, fence, job_type=JobType.DATASET_DDM_TRAINING)
+
+
+def _dispatch_vlm_training_job(ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence) -> None:
+    _dispatch_training_job(ctx, job_id, fence, job_type=JobType.DATASET_VLM_TRAINING)
+
+
+def _dispatch_training_job(
+    ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence, *, job_type: JobType
+) -> None:
+    """领取训练任务并委托 dataset owner 查询/登记；无结果可读时不重发训练。
+
+    两种训练服务共用同一段推进逻辑，只按任务类型选各自的 adapter 执行器。
+    """
+    if fence.cancelled:
+        return
+    identifier = UUID(job_id)
+    factory = _session_factory(ctx)
+    executor = _training_executor(ctx, job_type)
+    now = datetime.now(UTC)
+    with factory() as session:
+        jobs = PostgresJobRepository(session)
+        running = jobs.mark_running(job_id=identifier, now=now)
+        if not _commit_if_active(session, fence):
+            return
+    if running is None:
+        return
+
+    def finish_job(session: object, result: TrainingJobResult) -> bool:
+        if fence.cancelled:
+            return False
+        terminal_status = {
+            TrainingJobOutcome.COMPLETED: JobStatus.SUCCEEDED,
+            TrainingJobOutcome.FAILED: JobStatus.FAILED,
+            TrainingJobOutcome.CANCELLED: JobStatus.SUPERSEDED,
+        }.get(result.outcome)
+        if terminal_status is None:
+            raise RuntimeError("训练执行器请求了非终态的任务收尾")
+        return PostgresJobRepository(cast(Session, session)).finish(
+            job_id=running.id,
+            status=terminal_status.value,
+            failure_code=result.failure_code,
+            now=datetime.now(UTC),
+            expected_updated_at=running.updated_at,
+        )
+
+    def commit_transaction(session: object) -> bool:
+        return _commit_if_active(cast(Session, session), fence)
+
+    result = executor.execute_job(
+        command_id=running.attempt_id,
+        now=datetime.now(UTC),
+        resolve_current_caller=_current_caller_resolver(ctx),
+        finish_job=finish_job,
+        commit_transaction=commit_transaction,
+    )
+    if result.outcome is TrainingJobOutcome.PENDING and not fence.cancelled:
+        with factory() as session:
+            if not PostgresJobRepository(session).defer_training_poll(
+                job_id=running.id,
+                expected_updated_at=running.updated_at,
+                now=datetime.now(UTC),
+                job_type=job_type,
+            ):
+                session.rollback()
+                return
+            _commit_if_active(session, fence)
+
+
 def _generate_dataset_artifact_job(
     ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence
 ) -> None:
@@ -819,12 +908,32 @@ def _generate_dataset_artifact_job(
     def commit_transaction(session: object) -> bool:
         return _commit_if_active(cast(Session, session), fence)
 
-    _artifact_executor(ctx).execute(
+    executor = (
+        cast(DatasetCommandExecutor, ctx["augmentation_executor"])
+        if running.job_type is JobType.DATASET_AUGMENTATION
+        else _artifact_executor(ctx)
+    )
+    result = executor.execute(
         job=running,
         finish_job=finish_job,
         commit_transaction=commit_transaction,
         resolve_current_caller=_current_caller_resolver(ctx),
     )
+    if (
+        running.job_type is JobType.DATASET_AUGMENTATION
+        and result.outcome is ArtifactExecutionOutcome.RETRY_PENDING
+        and not fence.cancelled
+    ):
+        with factory() as session:
+            if not PostgresJobRepository(session).defer_command_poll(
+                job_id=running.id,
+                expected_updated_at=running.updated_at,
+                now=datetime.now(UTC),
+                job_type=running.job_type,
+            ):
+                session.rollback()
+                return
+            _commit_if_active(session, fence)
 
 
 async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) -> None:
@@ -1599,11 +1708,26 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
             )
         session.commit()
     with factory() as session:
-        pending = PostgresJobRepository(session).pending(limit=100)
+        pending = PostgresJobRepository(session).pending(
+            limit=100,
+            configured_training_types=dispatcher.configured_training_types,
+            include_augmentation=dispatcher.augmentation_configured,
+        )
     for job in pending:
         await dispatcher.dispatch_async(job.id)
     if "artifact_executor" in ctx:
         _artifact_executor(ctx).cleanup_candidates()
+
+
+async def run_retention_sweep_cron(ctx: Mapping[str, Any]) -> None:
+    """复用既有 worker 的调度；同步数据库工作不占用事件循环。"""
+    runner = cast(Callable[[], None] | None, ctx.get("retention_sweep"))
+    if runner is not None:
+        lock = cast(asyncio.Lock, ctx["retention_sweep_lock"])
+        if lock.locked():
+            return
+        async with lock:
+            await asyncio.to_thread(runner)
 
 
 def build_worker(
@@ -1615,7 +1739,10 @@ def build_worker(
     usage_runtime: DatasetUsageRuntime,
     artifact_executor: DatasetArtifactExecutor,
     annotation_runtime: DatasetAnnotationRuntime,
+    training_executors: Mapping[JobType, TrainingJobExecutor],
     current_caller_resolver: CurrentCallerResolver,
+    augmentation_executor: DatasetCommandExecutor | None = None,
+    retention_sweep: Callable[[], None] | None = None,
 ) -> Worker:
     """构造带数据库、Redis 和显式数据集运行时的 worker。"""
     dispatcher = ArqJobDispatcher.from_settings(settings, session_factory=factory)
@@ -1626,15 +1753,31 @@ def build_worker(
             generate_dataset_artifact_job,
             prepare_annotation_context_job,
             annotate_dataset_job,
-        ],
+            dispatch_ddm_training_job,
+            dispatch_vlm_training_job,
+        ]
+        + ([augment_dataset_job] if augmentation_executor is not None else []),
         cron_jobs=[
             cron(
                 dispatch_pending_jobs,
                 second={0, 30},
                 run_at_startup=True,
                 max_tries=1,
-            )
-        ],
+            ),
+        ]
+        + (
+            [
+                cron(
+                    run_retention_sweep_cron,
+                    second=set(range(60)),
+                    run_at_startup=True,
+                    keep_result=0,
+                    max_tries=1,
+                )
+            ]
+            if retention_sweep is not None
+            else []
+        ),
         redis_settings=dispatcher.redis_settings,
         ctx={
             "settings": settings,
@@ -1645,7 +1788,11 @@ def build_worker(
             "usage_runtime": usage_runtime,
             "artifact_executor": artifact_executor,
             "annotation_runtime": annotation_runtime,
+            "training_executors": dict(training_executors),
+            "augmentation_executor": augmentation_executor,
             "current_caller_resolver": current_caller_resolver,
+            "retention_sweep": retention_sweep,
+            "retention_sweep_lock": asyncio.Lock(),
             "blocking_job_slots": asyncio.Semaphore(_BLOCKING_JOB_LIMIT),
         },
         max_jobs=_BLOCKING_JOB_LIMIT,
@@ -1678,6 +1825,14 @@ def _annotation_runtime(ctx: Mapping[str, Any]) -> DatasetAnnotationRuntime:
     return cast(DatasetAnnotationRuntime, value)
 
 
+def _training_executor(ctx: Mapping[str, Any], job_type: JobType) -> TrainingJobExecutor:
+    executors = cast(Mapping[JobType, TrainingJobExecutor], ctx.get("training_executors") or {})
+    value = executors.get(job_type)
+    if value is None:
+        raise RuntimeError(f"worker 未装配训练执行器：{job_type.value}")
+    return value
+
+
 def _session_factory(ctx: Mapping[str, Any]) -> sessionmaker[Session]:
     value = ctx["session_factory"]
     return cast(sessionmaker[Session], value)
@@ -1701,7 +1856,15 @@ def run_worker(
     runtime_factory: Callable[[Settings], DatasetValidationRuntime],
     usage_runtime_factory: Callable[[Settings], DatasetUsageRuntime],
     annotation_runtime_factory: Callable[[Settings], DatasetAnnotationRuntime],
+    ddm_executor_factory: Callable[[Settings, sessionmaker[Session]], TrainingJobExecutor],
+    vlm_executor_factory: Callable[[Settings, sessionmaker[Session]], TrainingJobExecutor],
     current_caller_resolver_factory: Callable[[sessionmaker[Session]], CurrentCallerResolver],
+    augmentation_executor_factory: Callable[
+        [Settings, sessionmaker[Session]], DatasetCommandExecutor | None
+    ]
+    | None = None,
+    retention_sweep_factory: Callable[[Settings, sessionmaker[Session]], Callable[[], None]]
+    | None = None,
 ) -> None:
     """解析给定环境并运行 worker；真实运行时由组合根工厂显式装配。"""
     settings = Settings.from_environment(environment)
@@ -1712,7 +1875,14 @@ def run_worker(
     runtime = runtime_factory(settings)
     usage_runtime = usage_runtime_factory(settings)
     annotation_runtime = annotation_runtime_factory(settings)
+    training_executors = {
+        JobType.DATASET_DDM_TRAINING: ddm_executor_factory(settings, factory),
+        JobType.DATASET_VLM_TRAINING: vlm_executor_factory(settings, factory),
+    }
     current_caller_resolver = current_caller_resolver_factory(factory)
+    retention_sweep = (
+        None if retention_sweep_factory is None else retention_sweep_factory(settings, factory)
+    )
     worker = build_worker(
         settings,
         engine=engine,
@@ -1721,7 +1891,14 @@ def run_worker(
         usage_runtime=usage_runtime,
         artifact_executor=artifact_executor,
         annotation_runtime=annotation_runtime,
+        training_executors=training_executors,
+        augmentation_executor=(
+            augmentation_executor_factory(settings, factory)
+            if augmentation_executor_factory is not None
+            else None
+        ),
         current_caller_resolver=current_caller_resolver,
+        retention_sweep=retention_sweep,
     )
     try:
         worker.run()

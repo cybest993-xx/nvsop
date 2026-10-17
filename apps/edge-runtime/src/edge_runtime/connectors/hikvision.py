@@ -42,7 +42,7 @@ from time import monotonic
 from typing import Protocol
 from xml.etree import ElementTree
 
-from nvsop_contracts import Capability
+from nvsop_contracts import Capability, Measured, TimestampSource
 
 from edge_runtime.connectors.port import (
     ConnectorHealth,
@@ -61,7 +61,7 @@ from edge_runtime.connectors.port import (
     Written,
 )
 from edge_runtime.judgment.model import HostInstant
-from edge_runtime.supervisor.inputs import TimeAlignment
+from edge_runtime.supervisor.inputs import ClockEvidence
 
 BODY_LIMIT = 64 * 1024
 """How much of a response body is parsed at all.
@@ -329,7 +329,28 @@ class IsapiConnector:
         state = _port_state(body, self._profile)
         if isinstance(state, str):
             return Unreachable(detail=state)
-        return Reading(state=state, at=HostInstant(self._clock()), alignment=TimeAlignment.ALIGNED)
+        evidence = self._clock_evidence()
+        return Reading(
+            state=state,
+            at=HostInstant(self._clock()),
+            clock=evidence,
+        )
+
+    def _clock_evidence(self) -> ClockEvidence:
+        """这次读数能不能落在视频时间轴上 (§5.8).
+
+        轮询适配器只在答案到达时读主机时钟, 因此只有 ``HOST_RECEIPT`` 按构造对齐: 它的误差不超过
+        声明的最大投递延迟, 而该值在模板绑定时已按角色预算核对. 其余情况全部报 ``UNALIGNED``:
+        ``DEVICE_CLOCK`` 要求把设备自己的时间换算到主机时间轴, 而这次读取只有当前电平, 没有设备
+        时间戳, 偏移不可用; 未验证的能力连投递延迟都没有测量值. 凭空报 ``ALIGNED`` 会把一个放不上
+        时间轴的信号变成可判不通过的输入 (§5.8, §5.2).
+        """
+        if not isinstance(self._capability, Measured):
+            return ClockEvidence.unverified("unknown")
+        if self._capability.timestamps is TimestampSource.HOST_RECEIPT:
+            return ClockEvidence.host_receipt()
+        # 轮询只有电平没有设备事件时刻; 此处不虚构设备-主机时间偏移。
+        return ClockEvidence.unverified("device_clock")
 
 
 def _port_state(body: str, profile: IsapiProfile) -> PointState | str:

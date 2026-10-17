@@ -63,6 +63,15 @@ class Settings(BaseSettings):
     # 每进程独立 LISTEN 预算；上限为同步长流保留普通请求的线程余量。
     monitor_max_subscriptions: int = Field(default=16, gt=0, le=32)
 
+    # 影响确认时限由部署显式提供；缺失时只拒绝缩短，不阻断查看、延长或其他中心能力。
+    retention_estimate_ttl_seconds: int | None = Field(default=None, gt=0)
+    retention_impact_timeout_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    # 证据删除票据有效期同样由部署显式提供；缺失即没有删除资格，中心不提供业务默认值（§5.19）。
+    evidence_deletion_ticket_ttl_seconds: int | None = Field(default=None, gt=0)
+    # 回收任务的调度周期与批次上限：显式部署配置，不是保留时长；未配置周期则不运行回收。
+    retention_sweep_interval_seconds: int | None = Field(default=None, gt=0)
+    retention_sweep_batch_limit: int = Field(default=256, gt=0, le=10000)
+
     # How long a session survives, idle and in total (§六: sessions are server-side records,
     # so both are enforced here rather than encoded in a cookie). Minutes, because that is the
     # granularity an operator setting a shift-length timeout thinks in. `create_app` turns
@@ -91,6 +100,21 @@ class Settings(BaseSettings):
     annotation_data_root: str | None = None
     annotation_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     annotation_context_ttl_seconds: int = Field(default=3600, gt=0, le=86400)
+    # DDM 训练基座：URL、超时与基座/worker 共享的输入、结果挂载。未配置时命令保持 held，
+    # 不注册可实际 start 的公开操作；配置但训练服务不可达一律记诊断，不伪装成功。
+    augmentation_backend_url: str | None = None
+    augmentation_data_root: str | None = None
+    augmentation_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
+    ddm_training_backend_url: str | None = None
+    ddm_training_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
+    ddm_training_dataset_root: str | None = None
+    ddm_training_results_root: str | None = None
+    ddm_training_config_path: str | None = None
+    # VLM 训练基座：与 DDM 同一套约束；未配置时命令保持 held，不会静默开始训练。
+    vlm_training_backend_url: str | None = None
+    vlm_training_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
+    vlm_training_dataset_root: str | None = None
+    vlm_training_results_root: str | None = None
     # 已登记来源主机 UUID 到直读服务 origin；部署配置，不接受浏览器 URL。
     evidence_host_origins: dict[str, str] = Field(default_factory=dict)
     # ARQ 默认值保持 1 小时；开发环境通过环境变量缩短为 5 秒，让 worker 健康事实及时过期。
@@ -154,6 +178,85 @@ class Settings(BaseSettings):
                     "annotation_backend_url must be an HTTP(S) URL without userinfo, "
                     "query, or fragment"
                 )
+        if (self.augmentation_backend_url is None) != (self.augmentation_data_root is None):
+            raise ValueError(
+                "augmentation_backend_url and augmentation_data_root must be configured together"
+            )
+        if self.augmentation_backend_url is not None:
+            augmentation_url = urlsplit(self.augmentation_backend_url)
+            try:
+                augmentation_port = augmentation_url.port
+            except ValueError as error:
+                raise ValueError("augmentation_backend_url has an invalid port") from error
+            if (
+                augmentation_url.scheme not in {"http", "https"}
+                or not augmentation_url.hostname
+                or augmentation_url.username is not None
+                or augmentation_url.password is not None
+                or augmentation_url.query
+                or augmentation_url.fragment
+                or (augmentation_port is not None and not 1 <= augmentation_port <= 65535)
+            ):
+                raise ValueError(
+                    "augmentation_backend_url must be an HTTP(S) URL without credentials"
+                )
+            if (
+                not self.augmentation_data_root
+                or not Path(self.augmentation_data_root).is_absolute()
+            ):
+                raise ValueError("augmentation_data_root must be an absolute path")
+            if self.dataset_storage_root is None:
+                raise ValueError("augmentation requires dataset_storage_root")
+        # 各训练服务的基座地址、超时与基座/worker 共享的输入、结果挂载必须同时给出；
+        # 部分配置会让命令看起来可派发而实际无法核对真实消费文件或读取结果。
+        for service in ("ddm", "vlm"):
+            backend_url = getattr(self, f"{service}_training_backend_url")
+            dataset_root = getattr(self, f"{service}_training_dataset_root")
+            results_root = getattr(self, f"{service}_training_results_root")
+            config_path = getattr(self, f"{service}_training_config_path", None)
+            if (backend_url is None) != (dataset_root is None) or (backend_url is None) != (
+                results_root is None
+            ):
+                raise ValueError(
+                    f"{service}_training_backend_url, {service}_training_dataset_root and "
+                    f"{service}_training_results_root must be configured together"
+                )
+            if backend_url is not None:
+                training_url = urlsplit(backend_url)
+                try:
+                    training_port = training_url.port
+                except ValueError as error:
+                    raise ValueError(
+                        f"{service}_training_backend_url has an invalid port"
+                    ) from error
+                if (
+                    training_url.scheme not in {"http", "https"}
+                    or not training_url.hostname
+                    or training_url.username is not None
+                    or training_url.password is not None
+                    or training_url.query
+                    or training_url.fragment
+                    or (training_port is not None and not 1 <= training_port <= 65535)
+                ):
+                    raise ValueError(
+                        f"{service}_training_backend_url must be an HTTP(S) URL without "
+                        "userinfo, query, or fragment"
+                    )
+                for name, value in (
+                    (f"{service}_training_dataset_root", dataset_root),
+                    (f"{service}_training_results_root", results_root),
+                ):
+                    if value is None or not value.strip():
+                        raise ValueError(f"{name} must not be empty")
+                    if not Path(value).is_absolute():
+                        raise ValueError(f"{name} must be an absolute path")
+            if config_path is not None and not Path(config_path).is_absolute():
+                raise ValueError(f"{service}_training_config_path must be an absolute path")
+        if (
+            self.ddm_training_config_path is not None
+            and not Path(self.ddm_training_config_path).is_absolute()
+        ):
+            raise ValueError("ddm_training_config_path must be an absolute path")
         if self.annotation_media_origin is not None:
             media_origin = urlsplit(self.annotation_media_origin)
             try:

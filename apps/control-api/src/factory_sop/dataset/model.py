@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 
-from factory_sop.job.api import ApplicationJob
+from factory_sop.job.api import ApplicationJob, JobType
 
 
 class MemberStatus(StrEnum):
@@ -100,6 +101,123 @@ class ArtifactStatus(StrEnum):
     FAILED = "failed"
 
 
+class AugmentationStatus(StrEnum):
+    """unknown/bound 持续占用不安全输入；只有已证实终结才能释放。"""
+
+    PENDING = "pending"
+    RESULT_UNKNOWN = "result_unknown"
+    BOUND = "bound"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True, slots=True)
+class AugmentationCommand:
+    """首次输入不可改写，version 围栏观测与登记，不替代 PG 持久在途约束。"""
+
+    id: UUID
+    dataset_id: UUID
+    annotation_execution_id: UUID
+    label_data_id: str
+    idempotency_key: str
+    frame_drop_iterations: int
+    input_snapshot: Mapping[str, Any]
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+    status: AugmentationStatus = AugmentationStatus.PENDING
+    job_id: UUID | None = None
+    version: int = 0
+    backend_target: str | None = None
+    base_augmentation_id: str | None = None
+    dispatched_at: datetime | None = None
+    base_observation: Mapping[str, Any] = field(default_factory=dict)
+    last_observed_at: datetime | None = None
+    failure_code: str | None = None
+    result_status: str = "not_registered"
+    result_manifest: Mapping[str, Any] = field(default_factory=dict)
+    result_failure_code: str | None = None
+    cancelled_by: UUID | None = None
+    cancelled_at: datetime | None = None
+
+
+class TrainingService(StrEnum):
+    """命令归属的训练服务；同一张表按服务区分在途保护与结果命名。"""
+
+    DDM = "ddm"
+    VLM = "vlm"
+
+
+class TrainingCommandStatus(StrEnum):
+    """训练应用命令的持久化状态。
+
+    ``bound`` 与 ``result_unknown`` 都是仍在途的保护状态；``failed`` 表示可以证明
+    基座未开始或已终止失败；``completed`` 表示基座成功且结果已登记。
+    ``cancelled`` 对未派发命令表示本地取消；对已派发 DDM 必须有前后进程停止核实。
+    """
+
+    PENDING = "pending"
+    RESULT_UNKNOWN = "result_unknown"
+    BOUND = "bound"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TrainingResultStatus(StrEnum):
+    """训练结果读回并登记的持久化状态，与应用接受/派发事实分离。"""
+
+    NOT_REGISTERED = "not_registered"
+    REGISTERED = "registered"
+
+
+class TrainingBaseStatus(StrEnum):
+    """基座状态查询返回的稳定原状态；未知值不在此枚举中，也不映射为完成。"""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingResultNaming:
+    """一种训练服务已登记结果的对象键命名：前缀与两个固定文件名。
+
+    写入（adapter）与授权核对（用例）必须使用同一份命名事实，否则授权可能放行未登记对象。
+    """
+
+    prefix: str
+    config_filename: str
+    checkpoint_filename: str
+
+
+TRAINING_RESULT_NAMING: Mapping[TrainingService, TrainingResultNaming] = MappingProxyType(
+    {
+        TrainingService.DDM: TrainingResultNaming(
+            prefix="ddm-results",
+            config_filename="config.yaml",
+            checkpoint_filename="checkpoint.ckpt",
+        ),
+        TrainingService.VLM: TrainingResultNaming(
+            prefix="vlm-results",
+            config_filename="config.toml",
+            checkpoint_filename="checkpoint.manifest.json",
+        ),
+    }
+)
+
+# 每种训练服务对应的通用任务类型：调度器按类型决定是否已配置基座，worker 按类型选执行器。
+TRAINING_SERVICE_JOB_TYPES: Mapping[TrainingService, JobType] = MappingProxyType(
+    {
+        TrainingService.DDM: JobType.DATASET_DDM_TRAINING,
+        TrainingService.VLM: JobType.DATASET_VLM_TRAINING,
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class DdmVideoInput:
     """一次 DDM 检查冻结的一段完整源视频和动作时间段。"""
@@ -187,6 +305,66 @@ class DatasetArtifact:
     updated_at: datetime
     retryable: bool = False
     recovery_action: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingCommand:
+    """一次已受理的训练应用命令及其冻结输入事实。
+
+    `service` 指明这是哪一类训练服务的命令：同一张表承载多种服务，但恢复唯一匹配、
+    结果命名与取消入口都由该服务自己的 adapter 决定。
+    `payload` 是 dataset 拥有的冻结负载（独立训练/验证输入与按角色消费参数）；
+    `status` 为 `pending` 表示已受理但尚未派发，不得解释为训练已开始。应用接受/派发、
+    基座原状态与结果登记是三个不同事实：`base_observation` 只保存基座最后返回的原始状态，
+    `last_observed_at` 是最后一次成功观测时刻（与 `updated_at` 分离），
+    `observation_failure_*` 单独记录查询失败诊断，`result_status` 才表示结果可读登记。
+    """
+
+    id: UUID
+    dataset_id: UUID
+    service: TrainingService
+    status: TrainingCommandStatus
+    idempotency_key: str
+    request_digest: str
+    payload: Mapping[str, Any]
+    job_id: UUID | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+    # 派发事实：冻结的逻辑基座目标既是在途保护的范围键，也是「同一任务库」的可追溯声明；
+    # base_job_id 只在真实响应或唯一 all_jobs 匹配后写入，一旦写入不再替换。
+    backend_target: str | None = None
+    base_job_id: str | None = None
+    baseline_job_ids: tuple[str, ...] = ()
+    dispatch_facts: Mapping[str, Any] | None = None
+    base_observation: Mapping[str, Any] | None = None
+    failure_code: str | None = None
+    failure_detail: str | None = None
+    cancelled_by: UUID | None = None
+    cancelled_at: datetime | None = None
+    # 已派发命令的取消事实只记第一次请求：DDM 必须核实进程停止后才可取消终结，
+    # VLM 无停止证明时保留在途；原取消响应与本次核实结论分别记录。
+    cancel_requested_by: UUID | None = None
+    cancel_requested_at: datetime | None = None
+    cancel_response: Mapping[str, Any] | None = None
+    cancel_detail: str | None = None
+    # 最后一次成功读取基座原状态的时刻；查询失败不清空它，也不改写基座原状态。
+    last_observed_at: datetime | None = None
+    # 查询基座失败的独立诊断；与派发失败/结果失败分离，未知或不可达绝不表示完成。
+    observation_failure_code: str | None = None
+    observation_failure_detail: str | None = None
+    # 结果登记事实：只有真实配置与 checkpoint 核对并登记后才为 registered。
+    result_status: TrainingResultStatus = TrainingResultStatus.NOT_REGISTERED
+    result_generation: int = 0
+    result_config_object_key: str | None = None
+    result_config_sha256: str | None = None
+    result_config_size: int | None = None
+    result_checkpoint_object_key: str | None = None
+    result_checkpoint_sha256: str | None = None
+    result_checkpoint_size: int | None = None
+    result_failure_code: str | None = None
+    result_failure_detail: str | None = None
+    result_registered_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -30,6 +30,8 @@ uvicorn --factory factory_sop.entrypoint:build
 | SSE 订阅 | `SOP_MONITOR_MAX_SUBSCRIPTIONS` | 每个 API 进程的独立监听连接预算；默认值与上限由 Settings 拥有，超限返回 503 |
 | Session/CSRF | `SOP_SESSION_*`, `SOP_CSRF_SECRET_FILE` | absolute lifetime 不得短于 idle timeout |
 | 训练素材 | `SOP_DATASET_STORAGE_ROOT` | 必须是中心机上的绝对路径；写入经正式 API 流式完成 |
+| VLM 训练 | `SOP_VLM_TRAINING_BACKEND_URL`, `SOP_VLM_TRAINING_DATASET_ROOT`, `SOP_VLM_TRAINING_RESULTS_ROOT`, `SOP_VLM_TRAINING_HTTP_TIMEOUT_SECONDS` | URL/两个绝对根目录须成组；中心不读基座训练配置（读取器契约由代码中的冻结常量约束），未配置 URL 时任务保持 held |
+| DDM 训练 | `SOP_DDM_TRAINING_BACKEND_URL`, `SOP_DDM_TRAINING_DATASET_ROOT`, `SOP_DDM_TRAINING_RESULTS_ROOT`, `SOP_DDM_TRAINING_CONFIG_PATH`, `SOP_DDM_TRAINING_HTTP_TIMEOUT_SECONDS` | URL/两个绝对根目录须成组；配置路径绑定基座实际训练配置，HTTP timeout 只约束查询/派发，不是训练时限。未配置 URL 或配置路径时任务保持 held |
 | Redis | `SOP_REDIS_URL_FILE` | URL 必须是带主机的 `redis://` 或 `rediss://`；库号只能写在路径中（`redis://host:port/N`），URL 的 `db` 查询参数不会被读取 |
 | Dataset | upload TTL、max bytes、supported codecs | codec 列表不能为空 |
 | Media probe | binary、timeout | 默认开发镜像使用 `ffprobe` |
@@ -42,13 +44,39 @@ uvicorn --factory factory_sop.entrypoint:build
 
 开发 Compose 中的完整当前变量集合见 [`../../deploy/dev/compose.yaml`](../../deploy/dev/compose.yaml)，不要把其中的开发值复制成生产默认值。
 
+### DDM 共享路径与读取边界
+
+DDM 的 `DATASET_ROOT`/`RESULTS_ROOT` 与 worker 的对应 SOP 根目录必须是**同一卷、同一容器内绝对路径**：基座把路径写入训练配置，结果核对不能用另一条映射路径猜测。worker 对输入卷可写、结果卷只读；DDM 对结果卷可写。`SOP_DDM_TRAINING_CONFIG_PATH` 指向与 DDM `CONFIG_PATH` + `TRAIN_CONFIG_NAME` 相同的受信部署文件，挂载只读。worker 在执行前才读实际 reader 字段并与冻结的每角色参数比较；缺文件/字段或不匹配产生持久诊断，不启动训练。配置文件读取和基座连通性不作为中心/worker 启动前提，DDM 离线不阻止登录、模板及其他控制 API。
+
+VLM 基座的 `DATASET_ROOT`/`RESULTS_ROOT` 有同一条同卷同绝对路径约束：中心把待派发输入材料化到 `DATASET_ROOT/<vlm-命令身份>`，并按基座真实写出的合并配置核对它确实消费了这份输入；worker 对输入卷可写、结果卷只读，基座对结果卷可写。VLM 没有对应 `SOP_VLM_TRAINING_CONFIG_PATH`：基座自己的 `CONFIG_PATH`/`TOOL_PATH` 只影响基座，中心不依赖它们也能完成消费核对与结果登记。
+
+已经登记的结果保存在 `SOP_DATASET_STORAGE_ROOT`；Nginx 的 8444 数据服务只读挂载此卷，经当前会话与数据集查看权限授权后读取精确登记对象，控制 API 不传结果字节。对象键命名空间有两个：DDM 的 `ddm-results/{命令}/配置|checkpoint` 与 VLM 的 `vlm-results/{命令}/配置|checkpoint 清单`（后者不复制权重字节）。规则见 [ADR-0011](../adr/0011-annotation-derived-media-gateway.md)，配置见 [Nginx 示例](nginx-annotation.conf.example)；本地 Compose 接线见[开发部署](development.md#ddm-训练的可选部署)。
+
 ### 证据访问授权
 
-`SOP_EVIDENCE_HOST_ORIGINS` 是中心部署配置的 JSON 对象：键为已登记来源推理机的规范 UUID，值为浏览器可达的证据服务 HTTP(S) origin（不得含路径、凭据、查询或片段）。缺省为空；缺少该主机映射时签发返回 `source_host_unconfigured`，不能从浏览器参数、主机地址或猜测端口补齐。HTTP 只可用于 `fixed_main` + `allow_http` 本地部署。
+`SOP_EVIDENCE_HOST_ORIGINS` 是中心部署配置的 JSON 对象：键为已登记来源推理机的规范 UUID，值为浏览器可达的证据服务 HTTP(S) origin（不得含路径、凭据、查询或片段）。缺省为空；缺少该主机映射时签发返回 `source_host_unconfigured`，不能从浏览器参数、主机地址或猜测端口补齐。HTTP 只可用于 `fixed_main` + `allow_http` 本地部署。开发 Compose 的同一变量既送入中心进程环境，也由 `scripts/dev.py` 在渲染 `deploy/dev/nginx.conf` 时写入 `connect-src`/`media-src`，使浏览器能直连已配置来源；未配置来源仍被 CSP 拒绝。畸形 JSON、非规范 UUID、非法 origin 或注入字符在渲染阶段 fail-fast，不做弱默认降级。
 
 用户须有 `evidence.evidence.view` 权限。中心只签发绑定具体证据 ID、来源主机、会话指纹和短有效期的上下文，不返回媒体字节；来源主机每次读取均通过签名 `POST /api/v1/evidence/access-check` 复核当前会话与权限。登出、会话过期和撤权使旧上下文无法继续读取，上下文不延长会话。
 
 业务网关仅将 `/api/v1/evidence/registrations` 与 `/api/v1/evidence/access-check` 两条精确路径交给主机签名认证，清除 Cookie/Authorization/CSRF 而保留签名头；列表与签发仍走浏览器会话认证。中心不挂载、保存或代理证据目录。Edge 读取服务和 Web 播放入口另由各自部署步骤提供，只有授权协议不代表浏览器已可播放。
+
+### 保留影响估算
+
+缩短确认的有效期由中心环境 `SOP_RETENTION_ESTIMATE_TTL_SECONDS` 显式给出正整数秒，无业务默认值。缺失时中心仍可查看/延长，但拒绝缩短并返回 `RETENTION_ESTIMATE_TTL_UNCONFIGURED`；到期确认返回 `RETENTION_ESTIMATE_STALE`，需重新估算。不要借用命令租约作为有效期。
+
+本地已上报记录统计还须设置 `SOP_RETENTION_IMPACT_TIMEOUT_SECONDS`（正的有限秒数），并为全部来源机在 `SOP_EVIDENCE_HOST_ORIGINS` 中登记中心可达的服务 origin。缺超时/有效期不发送统计请求，缺 origin、未确认配置、未知历史确认时刻或来源不可达使估算不完整，不能确认相关缩短；不轮询、不缓存、不重试，不接受部分汇总。
+
+来源机按[独立证据服务](../../deploy/media/README.md#来源主机证据回看服务)增加 `--local-state <运行时实际使用的-SQLite-绝对路径>`，只读打开已由运行时迁移的状态；服务不创建、迁移或清理数据库。该机必须已经确认中心最新签发的配置。业务网关将精确 `POST /api/v1/retention/reported-impact/access-check` 与其他机器入口一样保留签名头、清除 Cookie/Authorization/CSRF；不能将整个 retention 路径豁免浏览器认证。票据只授权本次统计并逐次复核 `retention.policy.edit`，不授予媒体访问或删除权。
+
+### 证据删除资格
+
+删除票据有效期由中心环境 `SOP_EVIDENCE_DELETION_TICKET_TTL_SECONDS` 显式给出正整数秒，无业务默认值；缺失时 `claim` 整批拒绝并返回 `ticket_ttl_unconfigured`，`verify` 不产生新的删除授权（未授权认领同样返回 `ticket_ttl_unconfigured`），而已授权认领仍可复核以完成已有删除意图，`result` 也仍接受已持有认领的终局反馈以便完成已开头的清理。来源机在本机取消链接证据媒体前，经主机签名的 `POST /api/v1/retention/evidence-deletion-claims`（claim）、`.../verify`（删前复核并授权）与 `.../result`（终局反馈）领取/复核/结案一条删除认领。`verify` 放行即在同一权威锁下把认领推进到已授权阶段并持久：在来源机终局反馈前，修改保留策略、停用/恢复工位或签发绑定配置都会因权威锁被拒绝（`STATE_CONFLICT`），不能改写已放行的删除依据；未授权认领仍会因策略/配置变化返回既有 stale 原因。有效配置未变（`effective_sha256` 不变）的签名配置拉取与租约续期不推进修订，不被该权威锁阻断；只有真正改变删除所依据绑定权威的配置签发才被原子拒绝。未结案认领等价于该引用继续在审保护，不因票据过期自动释放，只有来源机的终局反馈才结案。来源机在取消链接与结果落账之间使用真实 SQLite 写事务，先落本机删除意图，上报失败或重启后重放，不从文件缺失推断成功。业务网关只放行这三个精确路径并保留签名头、清除 Cookie/Authorization/CSRF；不豁免整个 retention 路径，也不授予浏览器任何删除能力。中心只回答删除资格，实际取消链接只发生在拥有文件的推理机（ADR-0012）。
+
+升级运行时会在 SQLite V20 给四类上报账本追加可空 `acknowledged_at`，以后只在中心成功响应后冻结首次确认 UTC。历史发送行不回填，不得手工用发送单调时刻或接收时刻伪造确认。估算返回逻辑序列化字节，不能据此承诺磁盘空间或删除媒体。稳定整链路入口见[真实 PG/HTTPS/SQLite 系统场景](../../tests/system/test_sys_42_retention_impact.py)。
+
+### 回收执行调度
+
+中心回收任务复用既有 worker 进程的 cron，不新增服务。调度周期由 `SOP_RETENTION_SWEEP_INTERVAL_SECONDS` 显式给出正整数秒；缺失时回收不运行，不提供业务默认值。每张候选表的单轮有界行数由 `SOP_RETENTION_SWEEP_BATCH_LIMIT` 配置（默认 256，上限 10000）。每个周期以确定性身份在 `retention_sweep` 账本登记一行：同周期并发只有一个任务执行，崩溃残留被同周期重跑覆盖，失败行不阻塞下一周期重跑。`monitor` 明细记录删除前把窗口事实按工位/实例/小时聚合并写入 `monitor_record_archive`；违规与处置归档默认永久，不因回收删除。来源机的证据媒体删除由 #206 的本机执行器周期推进（低频有界 drain），中心不删除媒体字节（ADR-0012）。
 
 ## Web 开发代理
 
@@ -106,7 +134,7 @@ RestartSec=2
 - `local_state_path`
 - `stations`（非空）
 
-可选：`center_ca_file`、`media`、`evidence`、`queue_capacity`。
+可选：`center_ca_file`、`media`、`evidence`、`queue_capacity`、`disk_health`。
 
 `queue_capacity` 可选，未填写时四类待办分别默认最多 `10000` 条。显式设置时必须完整指定正整数 `reports`、`evidence`、`observations`、`health`。这些限制仅约束本机尚未确认的 SQLite 行数，不代表磁盘字节配额；部署仍须监控本机磁盘水位。处置写入账本不属于可丢弃队列。
 
@@ -122,6 +150,24 @@ RestartSec=2
 `LocalState.queue_status()` 在本机提供四类待办的深度、最早 `queue_id`、最近待办失败与容量边界；上报循环周期性记录 `edge.local_queue.status`，不输出可能含秘密的原始失败信息。达到容量时，新增待办拒绝并记录 `edge.local_queue.capacity_exhausted`，判定反应事务整体回滚；运行时另发 `edge.station.judgment_unavailable` 告警并按现有本地致命错误路径退出，由守护进程重启，不制造额外 `INDETERMINATE`/正常判定，不能对外声称已锁存或已完成判定。不得丢弃未确认的唯一副本，需修复积压并取得中心确认后恢复容量。磁盘自身写入失败同样不能被归类为单纯中心传输失败。
 
 主机私钥从文件读取并校验；连接器凭据同样留在本机 secret 文件。**当前生产入口以这份本地 JSON 作为 bootstrap/本机部署配置**。设计上的权威分工是中心拥有拓扑、模板、版本和期望运行参数，本机文件拥有本机连接信息、adapter profile 和设备秘密；不要把本机 secret 反向写入中心配置或 Git。
+
+### 磁盘水位与不可写告警
+
+`disk_health` 对 SQLite 所在目录、参与该工位连续录像的目录和已配置的证据目录分别采样，不假设它们共用文件系统。它使用当前进程可用块统计，并在目标目录创建、写入、`fsync` 后移除自己的小型探测文件。显式配置必须完整，例如：
+
+```json
+"disk_health": {
+  "high_watermark_percent": 90,
+  "recovery_watermark_percent": 80,
+  "check_interval_seconds": 5
+}
+```
+
+使用率 **≥ 高水位**、采样失败或探测不可写时，该路径进入失效；只有探测成功且使用率 **≤ 恢复边界**才恢复，中间区间保持失效。任一路径失效都通过 `STORAGE_UNAVAILABLE` 使该工位不可判定；其他路径或推理流恢复不能解除它。首次启动及重启按失效起步，所有路径确认低于或等于恢复边界后才解除，避免重启洗掉滞回状态。缺省参数由 [`storage_health.py`](../../apps/edge-runtime/src/edge_runtime/storage_health.py) 拥有；显式值必须有限、满足 `0 ≤ recovery < high < 100` 且采样间隔为正。
+
+中心设备页的运行镜像显示各路径最近上报的使用率、生效高水位/恢复边界和告警。事实沿既有健康队列积压及补报，不依赖中心在线；健康状态沿用旧中心已识别的 `delivering`，失效和未知状态仍按受损处理。仅首次及状态、整百分点或错误变化时入队。`edge.storage.health` 记录本机变化；SQLite 本身只读、满额或 I/O 失败时无法保证把告警持久化，运行循环记录 `edge.storage.write_failed` 并停止判定，由既有守护重启，不能继续发布通过。恢复只解除存储失效，不撤销锁存违规；探测不删除录像、在审证据或任何未确认的唯一副本。
+
+中心主机高水位通过[媒体导出应用步骤](../../deploy/media/README.md#应用中心导出的媒体配置)进入本机 `disk_health`；改中心字段后必须重新应用并重启，本机生效值与尚未应用的中心期望值不是同一事实。该可选导出字段不改变配置束 v2、健康上报形状或 SQLite schema。
 
 ### 工位配置形状
 
@@ -186,6 +232,33 @@ RestartSec=2
 
 分段文件名来自 MediaMTX `recordPath`，其时间戳是 MediaMTX 进程的本机时区。**部署必须保证 MediaMTX 与边缘运行时同一时区，或用 `recording_timezone` 显式声明 MediaMTX 的时区**，否则证据窗口会错位。入队时冻结录像墙钟映射与当时参与 SOP 的连续录像相机路径，重启或改绑后历史待办仍按当时来源切片。
 
+### 本机录像压缩
+
+可选的录像压缩归档由 `media` 的压缩字段启用；它复用 `evidence` 段已配置的 `ffprobe_binary`、`slice_timeout_seconds` 与 `recording_timezone`，因此需要同时启用证据切片，未配置证据切片的主机不执行压缩：
+
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `recording_compression_enabled` | `false` | 是否为已出原始素材窗口的录像分段生成候选并在校验后原子替换 |
+| `recording_compression_age_seconds` | `86400` | 原始素材窗口；整段录像时间都在窗口外的分段才可压缩 |
+| `recording_compression_crf` | `28`（占位） | H.264 质量档，取值 0–51。默认档须由目标子码流实测扫档确定（§5.19 约束 5），照抄占位值不是实测结论 |
+| `recording_compression_readrate` | 未限制 | 可选有限正数，传给 FFmpeg `-readrate`，单位为每墙钟秒读取的媒体秒数；例如 `0.5` 为半倍实时读取速率。省略时保留既有速度，修改在重新装配本机运行时后生效 |
+
+默认关闭，开启前须评估编码时原件与候选并存的空间、CRF 和资源争用。后台任务以本机 ffmpeg 生成 H.264 候选、真实校验并原子替换；提交顺序、素材占用与恢复契约见[录像压缩机制](../design/mechanisms/evidence-and-retention.md#压缩录像重编码归档证据不动记录使用-timescale-原生压缩)。通过 `edge.recording_compression.summary` 的 `created` / `replaced` / `skipped` / `failed` 观察候选生成、替换、跳过和失败；`edge.recording_compression.failed` 给出分段及失败原因。编码/校验失败且原件未变时仅移除本次临时产物，原件消失或变化时保留产物并告警，替换失败保留原件与有效候选；进程退出后复用留痕和实际文件继续处理。
+
+录像目录必须位于支持 Linux 目录 `flock`、同目录原子 rename 及文件/目录 `fsync` 的本机文件系统，不支持这些操作时告警而不绕过。压缩遇切片占用跳过本轮；受控子进程继承目录占用，父进程崩溃后仍活着的编码进程退出时才释放。保留 `<segment>.compressed.json` 与分段一起运维，不能单独清除；无法对应时拒绝切片/压缩。MediaMTX 的正常窗口回收与直连回放不参与该锁，窗口过期仍可能表现为素材缺失；压缩不改其回收策略，也不改证据文件和摘要。
+
+在 Web 的“工位与设备 → 录像压缩归档”选择推理机，使用“刷新实际状态”向来源机请求新观测；入队即控制，刷新、暂停、恢复、中止都需要 `device.inference_host.edit`（声明与执行同一个权限）。只读会话只看到状态文本和“查询命令结果”，不向推理机派发请求；`device.inference_host.view` 仅用于读取已回报的命令观测。请求入队后用“查询命令结果”读取确认；页面区分等待领取、等待来源机确认与实际观测，并显示 Asia/Shanghai 观测时间。查询失败可重试；请求未确认时同一操作复用幂等键。已展示的观测带时间，不表示持续在线；中心断网时本机任务继续按最后意图运行。
+
+本机管理集成可使用运行时已有 `runtime.compression` 的 `pause()` / `resume()` / `abort()` / `status()`，不另建执行者。`pausing` / `resuming` / `aborting` 是请求态，须继续查询到内核确认的 `paused` / `running` 或任务空闲、`aborted`；暂停不消耗命令执行超时，中止会收割包括暂停中的进程。暂停与中止意图以 `0600` 原子文件 `<recording_directory>/.compression-control.json` 持久保存，正常退出不删除原件或已验证候选。重启后保留暂停/中止，显式恢复后复核现有素材：复用已验证候选，未完成编码在取得独占后重做，完整产物验证并安装后才清理旧临时文件。`busy` 表示其他执行者或遗留子进程仍占用，不能启动重复压缩；运维须先确认旧任务归属并停止旧进程，再恢复。不要单独删除该目录或占用中的素材以解除占用。控制意图文件损坏时归档显示不可用并给出诊断，自治判定继续；检查素材后显式恢复会重写有效意图。
+
+### 本机存储分离与已上报队列裁剪
+
+`media.recording_directory` 不得包含 `local_state_path`；启用 `evidence` 时必须与 `evidence.evidence_directory` 分离。比较使用 canonical 路径，因此 symlink 别名也会被拒绝。根配置加载只要存在 `media` 就在写入者/MediaMTX 与切片启动前拒绝这类配置；证据切片在落盘前再次执行同一 owner 校验。滚动录像的年龄回收仍由 MediaMTX 既有窗口负责，这里不新增清理守护进程，也不建立第二份文件索引。
+
+运行时按最后确认配置的每工位 `local_reported` 有界裁剪 `local_report_queue`、`local_observation_queue`、`local_health_queue` 的逻辑行：每表每次只读取一个按主键 `queue_id` 排序的 keyset 页（最多固定行数，包含待上报行并显式记为跳过），在同一次 `BEGIN IMMEDIATE` 事务内读取最后确认配置并逐行判定。只有 `sent_at` 有权威 UTC 确认时刻（`acknowledged_at`；缺失、无时区或无法解析一律不删）、超过该工位年龄、不是该表最高 `queue_id`（避免复用已上报事件身份）、且不受未结实例/已锁存违规/待登记证据引用保护的行才被删除；待上报、未知策略/来源/确认时刻与受保护行保留并记录原因。扫描位置是本进程内存中的当前页起点，只在事务成功提交后前移；一页未满表示已到表尾并回绕到最小 `queue_id`，进程重启后从各表起点重新开始；`COMMIT` 或任何 SQLite 故障整体回滚、不采纳新位置并向上传播。该设计不依赖中心可达，也不缓存保护/资格事实。
+
+待上报事实、待登记证据元数据、证据媒体、实例/判定/违规身份与处置去重账本一律不因裁剪删除；中心引用登记完成只结案队列项，不授权删除媒体。当前没有已定稿媒体删除路径，媒体删除保持 fail-closed。运行时日志 `edge.local_reclamation.summary` 在删除或跳过非空时记录每队列逻辑范围（`range=最小-最大`）、删除/跳过计数与原因，不代表 SQLite 物理回收量或磁盘节省。
+
 ## 当前配置变更与同步机制
 
 `python -m edge_runtime` 仍先读取 `NVSOP_EDGE_COMMAND_CONFIG_FILE` 指向的本地 JSON。这份文件是**已实现的 bootstrap 与主机本地配置入口**：它提供中心地址、主机身份/私钥、本地推理端点与请求体、adapter profile、设备凭据、本地 SQLite 路径，以及首次无法取得中心确认配置时的自治起点；它不是中心拥有的拓扑、模板和运行参数的第二份权威。
@@ -212,5 +285,8 @@ maintenance loop 按 `command_poll_interval_seconds` 继续拉取。相同 revis
 - `/api/evaluation/health/ready` → `evaluation:32100`
 
 每个 readiness 在原 app 进程查询原 DB engine；DB 不可达返回 503。Nginx 运行时解析固定服务名，进程/DNS 不可用返回真实网关失败，不阻塞网关启动、不回退健康响应。上述四前缀的其他路径（含原静态 health、debug、clear 和训练写操作）仍拒绝。浏览器不能指定目标 host 或上游 URL。React 标注、媒体授权、源视频上传与结果读取继续使用既有入口，没有新增通用视频代理。
+
+
+增强应用命令（S077）从 Center 的 `training-datasets/{dataset_id}/augmentation-commands` 授权 API 受理；服务实际 HTTP 请求由中心 worker 对内调用原 `augmentation` FastAPI，而不是向浏览器开放另一个可直接写入的网关代理。可选地同时配置 `SOP_AUGMENTATION_BACKEND_URL`（内网 HTTP(S) 地址）和 `SOP_AUGMENTATION_DATA_ROOT`（中心 worker 与原基座挂载的同一绝对路径），超时可用 `SOP_AUGMENTATION_HTTP_TIMEOUT_SECONDS` 调整。只给其中一项会在 Center 配置校验时报错；均未配置时 outbox 命令保持待派发。原基座按已有 `label_data_id` 的数量生成非幂等后缀，因此同时派发同一标注输入或失联后盲重发会污染结果：在途约束保持在 PostgreSQL。原服务没有已派发取消入口，不能通过中心端模拟停止。
 
 四环境的冻结、构建和 CPU 部署证据命令及限制见[标注组合证据运行说明](annotation-evidence.md#训练环境冻结与统一入口验证s068)。GPU/完整生产安装兼容性、浏览器及离线制品验证不由 CPU readiness 证据替代。

@@ -15,18 +15,25 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi import FastAPI
 from sqlalchemy import Engine, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
+from starlette.requests import Request
 
+from factory_sop.auth.adapters.cookies import SESSION_COOKIE
+from factory_sop.auth.adapters.dependencies import authenticated_caller, session_refresh
 from factory_sop.auth.adapters.repository import (
+    PostgresRoleRepository,
     PostgresSessionRepository,
     PostgresUserRepository,
 )
 from factory_sop.auth.adapters.tables import UserRow
-from factory_sop.auth.model import Session, User, UserStatus
+from factory_sop.auth.errors import AuthenticationRefusedError
+from factory_sop.auth.model import Session, SessionPolicy, User, UserStatus
 from factory_sop.auth.passwords import hash_password
 from factory_sop.auth.repository import LoginNameTakenError, UserNotFoundError
+from factory_sop.auth.tokens import SessionToken, fingerprint
 from factory_sop.identifiers import new_id
 
 MONDAY_MORNING = datetime(2026, 9, 7, 1, 0, tzinfo=UTC)
@@ -320,3 +327,56 @@ def test_a_session_cannot_reference_an_account_that_does_not_exist(
 
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_session_refresh_after_released_read_transaction_preserves_renewal_and_revocation(
+    engine: Engine,
+) -> None:
+    user = an_account(login_name=f"retention-refresh-{new_id()}")
+    token = SessionToken.issue()
+    previous = datetime.now(UTC) - timedelta(minutes=5)
+    stored = Session(new_id(), user.id, fingerprint(token), previous, previous)
+    try:
+        with DatabaseSession(engine) as initial:
+            PostgresUserRepository(initial).add(user)
+            PostgresSessionRepository(initial).add(stored)
+            initial.commit()
+        app = FastAPI()
+        request = Request(
+            {
+                "type": "http",
+                "app": app,
+                "headers": [(b"cookie", f"{SESSION_COOKIE}={token.value}".encode())],
+            }
+        )
+        policy = SessionPolicy(timedelta(minutes=30), timedelta(hours=8))
+        with DatabaseSession(engine) as current:
+            users = PostgresUserRepository(current)
+            sessions = PostgresSessionRepository(current)
+            roles = PostgresRoleRepository(current)
+            refresh = session_refresh(request, users, sessions, roles, policy)
+            authenticated_caller(request, users, sessions, policy)
+            current.rollback()
+            with DatabaseSession(engine) as probe:
+                unchanged = PostgresSessionRepository(probe).by_token_fingerprint(
+                    fingerprint(token)
+                )
+                assert unchanged is not None
+                assert unchanged.last_used_at == previous
+            refreshed = refresh()
+            assert refreshed.user.id == user.id
+            assert current.in_transaction()
+            current.commit()
+            with DatabaseSession(engine) as probe:
+                persisted = PostgresSessionRepository(probe).by_token_fingerprint(
+                    fingerprint(token)
+                )
+                assert persisted is not None
+                assert persisted.last_used_at > previous
+                PostgresSessionRepository(probe).remove(persisted)
+                probe.commit()
+            with pytest.raises(AuthenticationRefusedError):
+                refresh()
+    finally:
+        with engine.begin() as connection:
+            connection.execute(delete(UserRow).where(UserRow.id == user.id))

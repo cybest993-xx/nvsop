@@ -64,6 +64,7 @@ class DeviceRefusalCode(StrEnum):
     COMMAND_CLAIM_EXPIRED = "COMMAND_CLAIM_EXPIRED"
     COMMAND_CLAIM_TOKEN_INVALID = "COMMAND_CLAIM_TOKEN_INVALID"
     COMMAND_ALREADY_COMPLETED = "COMMAND_ALREADY_COMPLETED"
+    COMMAND_OBSERVATION_UNCONFIRMED = "COMMAND_OBSERVATION_UNCONFIRMED"
     COMMAND_IDEMPOTENCY_CONFLICT = "COMMAND_IDEMPOTENCY_CONFLICT"
     COMMAND_CONFIGURATION_CHANGED = "COMMAND_CONFIGURATION_CHANGED"
     COMMAND_TARGET_NOT_FOUND = "COMMAND_TARGET_NOT_FOUND"
@@ -227,6 +228,8 @@ def refusal_problem(code: DeviceRefusalCode) -> tuple[int, str]:
             return 409, "委托命令领取令牌无效"
         case DeviceRefusalCode.COMMAND_ALREADY_COMPLETED:
             return 409, "委托命令已经完成"
+        case DeviceRefusalCode.COMMAND_OBSERVATION_UNCONFIRMED:
+            return 409, "来源机观测状态与委托动作不一致"
         case DeviceRefusalCode.COMMAND_IDEMPOTENCY_CONFLICT:
             return 409, "幂等键已经用于其他委托命令"
         case DeviceRefusalCode.COMMAND_CONFIGURATION_CHANGED:

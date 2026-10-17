@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import urlsplit
 
 from factory_sop.dataset.model import ObjectStat
 from factory_sop.dataset.storage import ObjectNotFoundError, ObjectStorageUnavailableError
@@ -97,12 +98,33 @@ class LocalFileObjectStorage:
             raise ObjectStorageUnavailableError("无法删除训练素材文件") from error
 
     def _path(self, object_key: str) -> Path:
-        """把服务端生成的相对对象键映射到根目录内的绝对路径。"""
-        if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+        """把服务端生成的相对对象键映射到根目录内的真实路径。
+
+        除拒绝绝对路径、路径穿越与非法字符外，还解析符号链接并确认最终路径仍在根内，
+        避免根目录内的符号链接把读写带出受控卷。
+        """
+        try:
+            parsed = urlsplit(object_key)
+        except ValueError as error:
+            raise ObjectStorageUnavailableError("对象键不是安全的相对路径") from error
+        if (
+            not object_key
+            or object_key.startswith("/")
+            or object_key.endswith("/")
+            or parsed.scheme
+            or parsed.netloc
+            or "\\" in object_key
+            or "\x00" in object_key
+            or ".." in object_key.split("/")
+        ):
             raise ObjectStorageUnavailableError("对象键不是安全的相对路径")
         candidate = self._root / object_key
         try:
-            candidate.relative_to(self._root)
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError) as error:
+            raise ObjectStorageUnavailableError("无法解析训练素材路径") from error
+        try:
+            resolved.relative_to(self._root)
         except ValueError as error:
             raise ObjectStorageUnavailableError("对象键越出训练素材根目录") from error
-        return candidate
+        return resolved

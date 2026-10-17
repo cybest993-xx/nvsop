@@ -17,6 +17,7 @@ from factory_sop.auth.api import Caller
 from factory_sop.device.model import (
     ClaimedReclipCommand,
     InferenceHostIdentity,
+    PendingCommand,
     RuntimeParameterMode,
     Station,
     StationRuntimeConfiguration,
@@ -36,6 +37,7 @@ from nvsop_contracts import (
     ConfiguredStation,
     HostIdentityRequest,
     PointRole,
+    ResolvedRetentionPolicy,
     ResolvedRuntimeParameters,
     Unfitness,
     unfit_for,
@@ -164,6 +166,57 @@ class DeviceHostGateway(Protocol):
 
     def owns_station_backend(self, *, host_id: UUID, station_id: UUID, backend_id: UUID) -> bool:
         """只允许认证主机上报自己拥有的工位和推理后端。"""
+        ...
+
+
+class DeviceExecutionHandoverCommandGateway(Protocol):
+    """execution 使用的已认证正常交权命令队列 owner seam。"""
+
+    def enqueue(
+        self,
+        *,
+        command_id: UUID,
+        handover_id: UUID,
+        host_id: UUID,
+        requested_by: UUID,
+        now: datetime,
+    ) -> None:
+        """与 execution 请求在同一事务内写入显式命令类型。"""
+        ...
+
+    def claim(
+        self,
+        *,
+        host: InferenceHostIdentity,
+        now: datetime,
+        lease_duration: timedelta,
+    ) -> PendingCommand | None:
+        """认证旧机后领取一条正常交权停机命令。"""
+        ...
+
+    def lock_claim(
+        self,
+        *,
+        command_id: UUID,
+        now: datetime,
+        host: InferenceHostIdentity | None = None,
+    ) -> bool:
+        """锁定命令至事务结束并返回是否曾领取；提供主机时先认证，否则由调用方鉴权。"""
+        ...
+
+    def complete(
+        self,
+        *,
+        command_id: UUID,
+        host: InferenceHostIdentity,
+        claim_token: str,
+        now: datetime,
+        outcome: str,
+        failure_code: str | None = None,
+        detail: str | None = None,
+        authenticated: bool = False,
+    ) -> PendingCommand:
+        """认证旧机后以严格结果结案命令；重复相同结果幂等。"""
         ...
 
 
@@ -333,8 +386,9 @@ class DeviceConfigurationGateway(Protocol):
         host_id: UUID,
         target: DeviceConfigurationTarget,
         runtime_defaults: ResolvedRuntimeParameters | None,
+        retention: ResolvedRetentionPolicy,
     ) -> ConfiguredStation:
-        """解析 device 拥有的拓扑与工位生效运行参数。"""
+        """解析 device 拥有的拓扑、工位生效运行参数与中心已解析的生效保留组。"""
         ...
 
     def finalize_configuration(
@@ -457,6 +511,7 @@ __all__ = [
     "DeviceConfigurationTarget",
     "DeviceConfigurationTopology",
     "DeviceEvidenceGateway",
+    "DeviceExecutionHandoverCommandGateway",
     "DeviceHistoricalAssignmentGateway",
     "DeviceHostGateway",
     "DeviceMonitorGateway",

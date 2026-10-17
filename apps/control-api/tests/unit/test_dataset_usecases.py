@@ -29,7 +29,10 @@ from factory_sop.dataset.model import (
     MemberStatus,
     ObjectStat,
     RetryMode,
+    TrainingCommand,
+    TrainingCommandStatus,
     TrainingDataset,
+    TrainingService,
     UploadAttempt,
     UsageCheck,
     VlmCandidate,
@@ -92,6 +95,7 @@ class FakeDatasets:
     vlm_candidates: dict[UUID, VlmCandidate] = field(default_factory=dict)
     usage_checks: dict[UUID, UsageCheck] = field(default_factory=dict)
     artifacts: dict[UUID, DatasetArtifact] = field(default_factory=dict)
+    ddm_commands: dict[UUID, TrainingCommand] = field(default_factory=dict)
 
     def dataset_by_id(self, dataset_id: UUID) -> TrainingDataset | None:
         return self.datasets.get(dataset_id)
@@ -280,6 +284,75 @@ class FakeDatasets:
 
     def artifact_by_id(self, artifact_id: UUID) -> DatasetArtifact | None:
         return self.artifacts.get(artifact_id)
+
+    def augmentation_by_key(self, dataset_id: UUID, key: str) -> None:
+        del dataset_id, key
+        return None
+
+    def augmentation_by_id(self, command_id: UUID) -> None:
+        del command_id
+        return None
+
+    def cancel_pending_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> None:
+        del dataset_id, command_id, actor_id, now
+
+    def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
+        return self.ddm_commands.get(command_id)
+
+    def training_command_by_idempotency(
+        self, *, service: TrainingService, dataset_id: UUID, idempotency_key: str
+    ) -> TrainingCommand | None:
+        return next(
+            (
+                command
+                for command in self.ddm_commands.values()
+                if command.service is service
+                and command.dataset_id == dataset_id
+                and command.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def list_training_commands(
+        self, *, service: TrainingService, dataset_id: UUID
+    ) -> list[TrainingCommand]:
+        return [
+            command
+            for command in self.ddm_commands.values()
+            if command.service is service and command.dataset_id == dataset_id
+        ]
+
+    def add_training_command(self, value: TrainingCommand) -> bool:
+        self.ddm_commands[value.id] = value
+        return True
+
+    def save_training_command(
+        self, value: TrainingCommand, *, expected_updated_at: datetime
+    ) -> bool:
+        del expected_updated_at
+        self.ddm_commands[value.id] = value
+        return True
+
+    def cancel_pending_training_command(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        command = self.ddm_commands.get(command_id)
+        if (
+            command is None
+            or command.dataset_id != dataset_id
+            or command.status is not TrainingCommandStatus.PENDING
+        ):
+            return False
+        self.ddm_commands[command_id] = replace(
+            command,
+            status=TrainingCommandStatus.CANCELLED,
+            cancelled_by=actor_id,
+            cancelled_at=now,
+            updated_at=now,
+        )
+        return True
 
     def artifact_by_input(self, *, dataset_id: UUID, input_digest: str) -> DatasetArtifact | None:
         return next(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +12,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
@@ -333,6 +334,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "dataset_vlm_candidate",
         "dataset_usage_check",
         "dataset_artifact",
+        "dataset_training_command",
     } <= _tables(database_at_0023)
     assert {
         "id",
@@ -441,7 +443,97 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
 
     with database_at_0023.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert version == "0060"
+        # 列上无残留 server_default：默认值只用于历史回填，不留给后续插入。
+        column_default = connection.execute(
+            text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name = 'evidence_evidence' AND column_name = 'review_state_known'"
+            )
+        ).scalar_one()
+    # #212 录制压缩在 0075，增强产物登记在 0076，历史状态都必须存在。
+    assert version == "0076"
+    assert {"compression_action", "compression_result"} <= _columns(
+        database_at_0023, "device_pending_command"
+    )
+    command_columns = _nullable_columns(database_at_0023, "device_pending_command")
+    assert command_columns["compression_action"] is True
+    assert command_columns["compression_result"] is True
+    assert {"dataset_augmentation_command", "dataset_training_command"} <= _tables(database_at_0023)
+    assert {
+        "dataset_id",
+        "annotation_execution_id",
+        "label_data_id",
+        "idempotency_key",
+        "input_snapshot",
+        "base_augmentation_id",
+        "result_status",
+        "result_manifest",
+    } <= _columns(database_at_0023, "dataset_augmentation_command")
+    # #215：正常交权授予结果与既有引用保护、回收账本随 head 到位。
+    assert {"new_grant_id", "granted_at", "granted_by"} <= _columns(
+        database_at_0023, "execution_normal_handover"
+    )
+    assert {
+        "retention_sweep",
+        "monitor_record_archive",
+        "monitor_retention_cursor",
+    } <= _tables(database_at_0023)
+    for identity in (
+        "monitor_decision_identity",
+        "monitor_observation_identity",
+        "monitor_health_identity",
+    ):
+        assert {"retired_payload_sha256", "retention_archived"} <= _columns(
+            database_at_0023, identity
+        )
+    assert {
+        "evidence_review_session",
+        "evidence_deletion_claim",
+        "evidence_playback_lease",
+    } <= _tables(database_at_0023)
+    assert {"review_state_known"} <= _columns(database_at_0023, "evidence_evidence")
+    assert column_default is None
+    assert {
+        "backend_target",
+        "base_job_id",
+        "baseline_job_ids",
+        "dispatch_facts",
+        "base_observation",
+        "failure_code",
+        "failure_detail",
+        "cancelled_by",
+        "cancelled_at",
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+        "service",
+        "last_observed_at",
+        "observation_failure_code",
+        "observation_failure_detail",
+        "result_status",
+        "result_generation",
+        "result_config_object_key",
+        "result_config_sha256",
+        "result_config_size",
+        "result_checkpoint_object_key",
+        "result_checkpoint_sha256",
+        "result_checkpoint_size",
+        "result_failure_code",
+        "result_failure_detail",
+        "result_registered_at",
+    } <= _columns(database_at_0023, "dataset_training_command")
+    with database_at_0023.connect() as connection:
+        inflight_index = connection.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE tablename = :table AND indexname = :index"),
+            {
+                "table": "dataset_training_command",
+                "index": "uq_dataset_training_command_service_backend_target_inflight",
+            },
+        ).scalar_one()
+    assert "UNIQUE" in inflight_index
+    assert "result_unknown" in inflight_index
+    assert "bound" in inflight_index
     assert "evidence.evidence.view" in _permission_codes(database_at_0023)
     assert "evidence.review.edit" in _permission_codes(database_at_0023)
     assert "evidence_review" in _tables(database_at_0023)
@@ -456,7 +548,22 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     assert "source_object_key" in _columns(database_at_0023, "dataset_annotation_context")
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
+    command.downgrade(configuration, "0073")
+    assert not {"compression_action", "compression_result"} & _columns(
+        database_at_0023, "device_pending_command"
+    )
     command.downgrade(configuration, "0025")
+    # 0065-0067 的回滚须移除引用保护、回收账本与聚合归档。
+    assert not {
+        "evidence_review_session",
+        "evidence_deletion_claim",
+        "evidence_playback_lease",
+        "retention_sweep",
+        "monitor_record_archive",
+        "monitor_retention_cursor",
+    } & _tables(database_at_0023)
+    assert "review_state_known" not in _columns(database_at_0023, "evidence_evidence")
+    assert "dataset_training_command" not in _tables(database_at_0023)
     assert "evidence.evidence.view" not in _permission_codes(database_at_0023)
     assert "evidence.review.edit" not in _permission_codes(database_at_0023)
     assert "evidence_review" not in _tables(database_at_0023)
@@ -488,6 +595,265 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     )
     command.downgrade(configuration, "0022")
     assert "job_application_job" not in _tables(database_at_0023)
+
+
+def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
+    database_at_0023: Engine,
+) -> None:
+    """0061→0068 保留冻结输入、job 与派发历史；新增取消列为空且可独立降级。"""
+    configuration = Config(str(CONTROL_API / "alembic.ini"))
+    configuration.set_main_option("script_location", str(CONTROL_API / "migrations"))
+    configuration.set_main_option(
+        "sqlalchemy.url", database_at_0023.url.render_as_string(hide_password=False)
+    )
+    command.upgrade(configuration, "0061")
+
+    actor, dataset_id, command_id, job_id = uuid4(), uuid4(), uuid4(), uuid4()
+    payload = {"input_id": str(uuid4()), "training": {}, "validation": {}}
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_dataset "
+                "(id, name, created_by, updated_by, created_at, updated_at) "
+                "VALUES (:id, :name, :actor, :actor, now(), now())"
+            ),
+            {"id": dataset_id, "name": "ddm-0062", "actor": actor},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dataset_ddm_training_command "
+                "(id, dataset_id, status, idempotency_key, request_digest, payload, job_id, "
+                " created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'pending', 'existing', :digest, "
+                " CAST(:payload AS jsonb), :job_id, :actor, now(), now())"
+            ),
+            {
+                "id": command_id,
+                "dataset_id": dataset_id,
+                "digest": "a" * 64,
+                "payload": json.dumps(payload),
+                "job_id": job_id,
+                "actor": actor,
+            },
+        )
+
+    command.upgrade(configuration, "0062")
+
+    with database_at_0023.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT status, payload, job_id, backend_target, base_job_id, baseline_job_ids, "
+                "dispatch_facts, base_observation, failure_code, failure_detail "
+                "FROM dataset_ddm_training_command WHERE id = :id"
+            ),
+            {"id": command_id},
+        ).one()
+        version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    assert version == "0062"
+    assert row.status == "pending"
+    assert row.payload == payload
+    assert row.job_id == job_id
+    assert row.backend_target is None
+    assert row.base_job_id is None
+    assert row.baseline_job_ids is None
+    assert row.dispatch_facts is None
+    assert row.base_observation is None
+    assert row.failure_code is None
+    assert row.failure_detail is None
+
+    # pending 不占在途保护；同一 backend_target 的第二条 result_unknown 被部分唯一索引拒绝。
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_ddm_training_command "
+                "(id, dataset_id, status, idempotency_key, request_digest, payload, "
+                " created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'pending', 'second-pending', :digest, "
+                " '{}'::jsonb, :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "b" * 64, "actor": actor},
+        )
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_ddm_training_command "
+                "(id, dataset_id, status, idempotency_key, request_digest, payload, "
+                " backend_target, created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'result_unknown', 'inflight-1', :digest, "
+                " '{}'::jsonb, 'target', :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "c" * 64, "actor": actor},
+        )
+    with pytest.raises(IntegrityError), database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_ddm_training_command "
+                "(id, dataset_id, status, idempotency_key, request_digest, payload, "
+                " backend_target, created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'result_unknown', 'inflight-2', :digest, "
+                " '{}'::jsonb, 'target', :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "d" * 64, "actor": actor},
+        )
+
+    command.upgrade(configuration, "0067")
+    # 构造已绑定的历史事实，取消元数据升级不能重建或丢弃它。
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE dataset_ddm_training_command SET status = 'bound', "
+                "backend_target = 'history', base_job_id = 'base-history', "
+                'dispatch_facts = \'{"training_dataset_id": "frozen-training"}\'::jsonb, '
+                'base_observation = \'{"status": "completed", "result": "historical"}\'::jsonb '
+                "WHERE id = :id"
+            ),
+            {"id": command_id},
+        )
+        original = (
+            connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
+            .mappings()
+            .all()
+        )
+    command.upgrade(configuration, "0068")
+    with database_at_0023.connect() as connection:
+        upgraded = (
+            connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
+            .mappings()
+            .all()
+        )
+    assert len(upgraded) == len(original)
+    for old, new in zip(original, upgraded, strict=True):
+        assert new["cancelled_by"] is None
+        assert new["cancelled_at"] is None
+        assert {key: value for key, value in new.items() if key in old} == dict(old)
+
+    # 0073 保持 DDM 历史命令并新增已派发取消事实；0074 再扩展到 VLM 服务维度。
+    command.upgrade(configuration, "0073")
+    assert "dataset_ddm_training_command" in _tables(database_at_0023)
+    assert {
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } <= _columns(database_at_0023, "dataset_ddm_training_command")
+    command.upgrade(configuration, "0074")
+    assert "dataset_ddm_training_command" not in _tables(database_at_0023)
+    assert "dataset_training_command" in _tables(database_at_0023)
+    assert {
+        "service",
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } <= _columns(database_at_0023, "dataset_training_command")
+    with database_at_0023.connect() as connection:
+        services = (
+            connection.execute(text("SELECT service FROM dataset_training_command")).scalars().all()
+        )
+        foreign_key = connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid = 'dataset_training_command'::regclass AND contype = 'f'"
+            )
+        ).scalar_one()
+        inflight_index = connection.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = :index"),
+            {"index": "uq_dataset_training_command_service_backend_target_inflight"},
+        ).scalar_one()
+    assert set(services) == {"ddm"}
+    assert "REFERENCES dataset_training_dataset(id)" in foreign_key
+    assert "UNIQUE" in inflight_index
+    assert "service" in inflight_index
+    assert "backend_target" in inflight_index
+
+    # 幂等键按数据集+服务唯一：VLM 可以复用 DDM 已用的键，重复的 VLM 键仍被拒绝。
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_command "
+                "(id, dataset_id, service, status, idempotency_key, request_digest, payload, "
+                " created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'vlm', 'pending', 'existing', :digest, "
+                " '{}'::jsonb, :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "e" * 64, "actor": actor},
+        )
+    with pytest.raises(IntegrityError), database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_command "
+                "(id, dataset_id, service, status, idempotency_key, request_digest, payload, "
+                " created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'vlm', 'pending', 'existing', :digest, "
+                " '{}'::jsonb, :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "f" * 64, "actor": actor},
+        )
+
+    # 在途保护也按服务隔离：VLM 可以在同一 backend_target 上派发，第二条 VLM 在途被拒绝。
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_command "
+                "(id, dataset_id, service, status, idempotency_key, request_digest, payload, "
+                " backend_target, created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'vlm', 'result_unknown', 'vlm-inflight-1', :digest, "
+                " '{}'::jsonb, 'target', :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "0" * 64, "actor": actor},
+        )
+    with pytest.raises(IntegrityError), database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_command "
+                "(id, dataset_id, service, status, idempotency_key, request_digest, payload, "
+                " backend_target, created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'vlm', 'result_unknown', 'vlm-inflight-2', :digest, "
+                " '{}'::jsonb, 'target', :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "1" * 64, "actor": actor},
+        )
+
+    # 回到 0073 的单服务 schema 不能丢失 VLM 命令；但既有 DDM 取消事实需保持。
+    with pytest.raises(DBAPIError, match="non-DDM"):
+        command.downgrade(configuration, "0073")
+    with database_at_0023.begin() as connection:
+        connection.execute(text("DELETE FROM dataset_training_command WHERE service = 'vlm'"))
+    command.downgrade(configuration, "0073")
+    assert "dataset_training_command" not in _tables(database_at_0023)
+    assert "dataset_ddm_training_command" in _tables(database_at_0023)
+    assert "service" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    assert {
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } <= _columns(database_at_0023, "dataset_ddm_training_command")
+    # 只有再回退 0073 时才移除该版本增加的取消事实列。
+    command.downgrade(configuration, "0072")
+    assert not {
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } & _columns(database_at_0023, "dataset_ddm_training_command")
+    with database_at_0023.connect() as connection:
+        restored_index = connection.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = :index"),
+            {"index": "uq_dataset_ddm_training_command_backend_target_inflight"},
+        ).scalar_one()
+    assert "UNIQUE" in restored_index
+    assert "service" not in restored_index
+    command.downgrade(configuration, "0067")
+    assert "cancelled_by" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    assert "cancelled_at" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    with database_at_0023.connect() as connection:
+        restored = (
+            connection.execute(text("SELECT * FROM dataset_ddm_training_command ORDER BY id"))
+            .mappings()
+            .all()
+        )
+    assert restored == original
 
 
 def test_0050_handover_history_survives_device_deletion(database_at_0023: Engine) -> None:

@@ -487,6 +487,56 @@ _V19 = (
     "ALTER TABLE local_reclip_request ADD COLUMN terminal_error_detail TEXT",
 )
 
+# S042:从中心确认成功的 UTC 起算本地已上报保留期;历史单调时钟不回填成 UTC。
+_V20 = (
+    "ALTER TABLE local_report_queue ADD COLUMN acknowledged_at TEXT",
+    "ALTER TABLE local_observation_queue ADD COLUMN acknowledged_at TEXT",
+    "ALTER TABLE local_health_queue ADD COLUMN acknowledged_at TEXT",
+    "ALTER TABLE local_disposal ADD COLUMN acknowledged_at TEXT",
+)
+
+# #206 删除资格是分布式两阶段动作: 中心认领/授权与来源机取消链接之间可能重启或上报失败。
+# 该表只记本机已持有的删除意图与终局结果, 使重启后能重放 result、在 verify 不可达时收敛未结案
+# 认领; 它不是审计表、不是通用任务/GC, 也只引用本机证据身份, 不经目录扫描猜测成功。
+_V21 = (
+    """
+    CREATE TABLE local_evidence_deletion (
+        evidence_id       TEXT    PRIMARY KEY,
+        station_id        TEXT    NOT NULL,
+        instance_id       INTEGER NOT NULL,
+        claim_id          TEXT    NOT NULL,
+        ticket            TEXT    NOT NULL,
+        claim_expires_at  REAL,
+        stage             TEXT    NOT NULL CHECK (stage IN ('claimed', 'result_pending')),
+        outcome           TEXT,
+        reason_code       TEXT,
+        detail            TEXT,
+        generation        TEXT    NOT NULL,
+        observed_sha256   TEXT    NOT NULL,
+        observed_size     INTEGER NOT NULL,
+        reference         TEXT    NOT NULL,
+        created_at        REAL    NOT NULL,
+        updated_at        REAL    NOT NULL,
+        attempts          INTEGER NOT NULL DEFAULT 0,
+        last_error        TEXT,
+        CHECK ((stage = 'result_pending') = (outcome IS NOT NULL))
+    )
+    """,
+)
+
+# #214 正常交权停写 fence: 确认前本机先持久禁写, 后停机. 重启/崩溃不得复活物理写入;
+# 同一 grant 的续期/配置重报不清 fence, 只有后继新 grant (#215) 才恢复. 冻结 grant 身份
+# 供后继请求区分旧 grant 重放与真恢复, 不记录时间倒计时.
+_V22 = (
+    """
+    CREATE TABLE local_execution_write_fence (
+        station_id  TEXT PRIMARY KEY,
+        grant_id    TEXT NOT NULL,
+        stopped_at  REAL NOT NULL
+    )
+    """,
+)
+
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V1,
     _V2,
@@ -507,6 +557,9 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
     _V17,
     _V18,
     _V19,
+    _V20,
+    _V21,
+    _V22,
 )
 """Every migration in order. Index + 1 is the `user_version` it takes a database to."""
 

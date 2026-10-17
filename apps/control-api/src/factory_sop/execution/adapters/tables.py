@@ -5,10 +5,23 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, UniqueConstraint, Uuid
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    String,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
-from factory_sop.execution.model import HandoverConfirmation, StationGrant
+from factory_sop.execution.model import (
+    HandoverConfirmation,
+    NormalHandover,
+    NormalHandoverStatus,
+    StationGrant,
+)
 from factory_sop.persistence import Table
 
 
@@ -43,6 +56,88 @@ class StationGrantRow(Table):
             lease_expires_at=self.lease_expires_at,
             renewed_at=self.renewed_at,
             request_id=self.request_id,
+        )
+
+
+class NormalHandoverRow(Table):
+    """正常交权请求；旧租约身份与命令身份建立后不可变。"""
+
+    __tablename__ = "execution_normal_handover"
+
+    handover_id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    station_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_station.id", ondelete="RESTRICT"), index=True
+    )
+    from_host_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_inference_host.id", ondelete="RESTRICT"), index=True
+    )
+    to_host_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("device_inference_host.id", ondelete="RESTRICT")
+    )
+    grant_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False)
+    command_id: Mapped[UUID] = mapped_column(Uuid(), nullable=False, unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    requested_by: Mapped[UUID] = mapped_column(Uuid(), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    timed_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    failure_detail: Mapped[str | None] = mapped_column(String(255))
+    new_grant_id: Mapped[UUID | None] = mapped_column(Uuid())
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    granted_by: Mapped[UUID | None] = mapped_column(Uuid())
+
+    def to_domain(self) -> NormalHandover:
+        return NormalHandover(
+            handover_id=self.handover_id,
+            station_id=self.station_id,
+            from_host_id=self.from_host_id,
+            to_host_id=self.to_host_id,
+            grant_id=self.grant_id,
+            command_id=self.command_id,
+            idempotency_key=self.idempotency_key,
+            requested_by=self.requested_by,
+            requested_at=self.requested_at,
+            expires_at=self.expires_at,
+            status=NormalHandoverStatus(self.status),
+            confirmed_at=self.confirmed_at,
+            cancelled_at=self.cancelled_at,
+            timed_out_at=self.timed_out_at,
+            failed_at=self.failed_at,
+            failure_code=self.failure_code,
+            failure_detail=self.failure_detail,
+            new_grant_id=self.new_grant_id,
+            granted_at=self.granted_at,
+            granted_by=self.granted_by,
+        )
+
+    @classmethod
+    def from_domain(cls, value: NormalHandover) -> NormalHandoverRow:
+        return cls(
+            handover_id=value.handover_id,
+            station_id=value.station_id,
+            from_host_id=value.from_host_id,
+            to_host_id=value.to_host_id,
+            grant_id=value.grant_id,
+            command_id=value.command_id,
+            idempotency_key=value.idempotency_key,
+            requested_by=value.requested_by,
+            requested_at=value.requested_at,
+            expires_at=value.expires_at,
+            status=value.status.value,
+            confirmed_at=value.confirmed_at,
+            cancelled_at=value.cancelled_at,
+            timed_out_at=value.timed_out_at,
+            failed_at=value.failed_at,
+            failure_code=value.failure_code,
+            failure_detail=value.failure_detail,
+            new_grant_id=value.new_grant_id,
+            granted_at=value.granted_at,
+            granted_by=value.granted_by,
         )
 
 

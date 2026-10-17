@@ -12,9 +12,12 @@ from factory_sop.dataset.model import (
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
+    AugmentationCommand,
     DatasetArtifact,
     DatasetMember,
+    TrainingCommand,
     TrainingDataset,
+    TrainingService,
     UploadAttempt,
     UsageCheck,
     UsageKind,
@@ -234,4 +237,79 @@ class UsageDatasetRepository(DatasetRepository, Protocol):
 
     def save_artifact(self, value: DatasetArtifact, *, expected_updated_at: datetime) -> bool:
         """按执行租约写回制品。"""
+        ...
+
+
+class AugmentationRepository(DatasetRepository, Protocol):
+    """增强受理与状态存储，不扩张已有上传/用途测试的仓储要求。"""
+
+    def add_augmentation(self, value: AugmentationCommand) -> bool:
+        """仅追加；同一数据集幂等键已存在时返回 False。"""
+        ...
+
+    def augmentation_by_key(self, dataset_id: UUID, key: str) -> AugmentationCommand | None:
+        """读取首次受理事实。"""
+        ...
+
+    def augmentation_by_id(self, command_id: UUID) -> AugmentationCommand | None:
+        """读取最新持久事实。"""
+        ...
+
+    def list_augmentations(self, dataset_id: UUID) -> Sequence[AugmentationCommand]:
+        """按创建顺序读回命令历史。"""
+        ...
+
+    def save_augmentation(self, value: AugmentationCommand, *, expected_version: int) -> bool:
+        """围栏可变观测/登记字段；绝不改写首次输入。"""
+        ...
+
+    def cancel_pending_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> None:
+        """取消与派发意图在同一 pending 行上竞争。"""
+        ...
+
+
+class TrainingCommandRepository(UsageDatasetRepository, Protocol):
+    """训练命令受理、查询与取消的仓储契约，不扩张用途/制品 seam。
+
+    同一种表按 ``service`` 区分训练服务；每个服务自己的 adapter 决定输入、恢复身份与结果。
+    """
+
+    def add_training_command(self, value: TrainingCommand) -> bool:
+        """按数据集与服务范围的幂等键条件追加训练命令；键已被并发占用时返回 ``False``。"""
+        ...
+
+    def training_command_by_idempotency(
+        self, *, service: TrainingService, dataset_id: UUID, idempotency_key: str
+    ) -> TrainingCommand | None:
+        """按数据集与服务范围的幂等键读取训练命令。"""
+        ...
+
+    def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
+        """按命令身份读取训练命令，不看服务归属。"""
+        ...
+
+    def list_training_commands(
+        self, *, service: TrainingService, dataset_id: UUID
+    ) -> Sequence[TrainingCommand]:
+        """按创建顺序读取归该服务的全部训练命令。"""
+        ...
+
+    def save_training_command(
+        self, value: TrainingCommand, *, expected_updated_at: datetime
+    ) -> bool:
+        """只在租约仍匹配时绑定命令的 job 身份，防止过期写入覆盖获胜结果。"""
+        ...
+
+    def cancel_pending_training_command(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        """与派发意图竞争同一 pending 状态；只写取消事实，不提交事务或改写输入。"""
+        ...
+
+    def request_training_cancellation(
+        self, *, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        """派发意图后只记录首次取消请求；状态与在途保护保持，不提交事务。"""
         ...

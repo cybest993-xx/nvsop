@@ -465,6 +465,7 @@ export type ApiErrorCode =
   | 'COMMAND_CLAIM_EXPIRED'
   | 'COMMAND_CLAIM_TOKEN_INVALID'
   | 'COMMAND_ALREADY_COMPLETED'
+  | 'COMMAND_OBSERVATION_UNCONFIRMED'
   | 'COMMAND_IDEMPOTENCY_CONFLICT'
   | 'COMMAND_CONFIGURATION_CHANGED'
   | 'COMMAND_TARGET_NOT_FOUND'
@@ -522,6 +523,10 @@ export type ApiErrorCode =
   | 'USAGE_STATE_CONFLICT'
   | 'ARTIFACT_NOT_FOUND'
   | 'ARTIFACT_UNAVAILABLE'
+  | 'DDM_TRAINING_COMMAND_NOT_FOUND'
+  | 'DDM_TRAINING_RESULT_NOT_FOUND'
+  | 'VLM_TRAINING_COMMAND_NOT_FOUND'
+  | 'VLM_TRAINING_RESULT_NOT_FOUND'
   | 'JOB_NOT_FOUND'
   | 'JOB_RESOURCE_NOT_FOUND'
   | 'ACTIVE_GRANT_EXISTS'
@@ -535,6 +540,20 @@ export type ApiErrorCode =
   | 'HANDOVER_TARGET_NOT_FOUND'
   | 'HANDOVER_SOURCE_MISMATCH'
   | 'HANDOVER_SAME_HOST'
+  | 'NORMAL_HANDOVER_NOT_FOUND'
+  | 'NORMAL_HANDOVER_PENDING'
+  | 'NORMAL_HANDOVER_ALREADY_TERMINAL'
+  | 'NORMAL_HANDOVER_ALREADY_CLAIMED'
+  | 'NORMAL_HANDOVER_GRANT_EXPIRED'
+  | 'NORMAL_HANDOVER_STALE_CONFIRMATION'
+  | 'NORMAL_HANDOVER_IDENTITY_MISMATCH'
+  | 'NORMAL_HANDOVER_NOT_CONFIRMED'
+  | 'RETENTION_POLICY_CONFLICT'
+  | 'RETENTION_POLICY_INVALID'
+  | 'RETENTION_ESTIMATE_REQUIRED'
+  | 'RETENTION_ESTIMATE_STALE'
+  | 'RETENTION_ESTIMATE_INCOMPLETE'
+  | 'RETENTION_ESTIMATE_TTL_UNCONFIGURED'
 
 /**
  * ArtifactAcceptedView
@@ -646,6 +665,111 @@ export type AssignedRoles = {
    * Role Ids
    */
   role_ids: Array<string>
+}
+
+/**
+ * AugmentationStatus
+ *
+ * unknown/bound 持续占用不安全输入；只有已证实终结才能释放。
+ */
+export type AugmentationStatus =
+  'pending' | 'result_unknown' | 'bound' | 'completed' | 'failed' | 'cancelled'
+
+/**
+ * AugmentationView
+ *
+ * 公开状态与来源摘要；内部冻结载荷、共享卷清单和对象键留在 dataset。
+ */
+export type AugmentationView = {
+  /**
+   * Annotation Execution Id
+   */
+  annotation_execution_id: string
+  /**
+   * Base Augmentation Id
+   */
+  base_augmentation_id: string | null
+  /**
+   * Base Progress
+   */
+  base_progress: number | null
+  /**
+   * Base Status
+   */
+  base_status: string | null
+  /**
+   * Cancelled At
+   */
+  cancelled_at: string | null
+  /**
+   * Cancelled By
+   */
+  cancelled_by: string | null
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Dispatched At
+   */
+  dispatched_at: string | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Frame Drop Iterations
+   */
+  frame_drop_iterations: number
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Input Source
+   */
+  input_source: string
+  /**
+   * Job Id
+   */
+  job_id: string | null
+  /**
+   * Last Observed At
+   */
+  last_observed_at: string | null
+  /**
+   * Original Filename
+   */
+  original_filename: string
+  /**
+   * Result Failure Code
+   */
+  result_failure_code: string | null
+  /**
+   * Result File Count
+   */
+  result_file_count: number
+  /**
+   * Result Status
+   */
+  result_status: 'not_registered' | 'registered'
+  /**
+   * Result Total Bytes
+   */
+  result_total_bytes: number
+  status: AugmentationStatus
+  /**
+   * Updated At
+   */
+  updated_at: string
 }
 
 /**
@@ -1069,6 +1193,104 @@ export type CameraView = {
    * Updated By
    */
   updated_by: string
+}
+
+/**
+ * CompressionClaimView
+ */
+export type CompressionClaimView = {
+  /**
+   * Action
+   */
+  action: 'inspect' | 'pause' | 'resume' | 'abort'
+  /**
+   * Claim Token
+   */
+  claim_token: string
+  /**
+   * Command Id
+   */
+  command_id: string
+  /**
+   * Command Type
+   */
+  command_type?: 'control_recording_compression'
+  /**
+   * Lease Expires At
+   */
+  lease_expires_at: number
+}
+
+/**
+ * CompressionCommandView
+ */
+export type CompressionCommandView = {
+  /**
+   * Action
+   */
+  action: 'inspect' | 'pause' | 'resume' | 'abort'
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Id
+   */
+  id: string
+  observation: CompressionObservation | null
+  /**
+   * Observed At
+   */
+  observed_at: string | null
+  status: PendingCommandStatus
+}
+
+/**
+ * CompressionInput
+ */
+export type CompressionInput = {
+  /**
+   * Action
+   */
+  action: 'inspect' | 'pause' | 'resume' | 'abort'
+}
+
+/**
+ * CompressionObservation
+ */
+export type CompressionObservation = {
+  /**
+   * Detail
+   */
+  detail: string | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Pid
+   */
+  pid: number | null
+  /**
+   * Readrate
+   */
+  readrate: number | null
+  /**
+   * Requested
+   */
+  requested: string
+  /**
+   * Segment
+   */
+  segment: string | null
+  /**
+   * State
+   */
+  state: string
 }
 
 /**
@@ -1587,6 +1809,238 @@ export type DatasetView = {
 }
 
 /**
+ * DdmInputSelectionInput
+ *
+ * 一次 DDM 训练选择的一套已通过输入来源。
+ */
+export type DdmInputSelectionInput = {
+  /**
+   * Artifact Id
+   */
+  artifact_id: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Usage Check Id
+   */
+  usage_check_id: string
+}
+
+/**
+ * DdmResultAccessView
+ *
+ * 已授权数据通道的访问地址；控制面从不中转大体积字节。
+ */
+export type DdmResultAccessView = {
+  /**
+   * Checkpoint Url
+   */
+  checkpoint_url: string
+  /**
+   * Config Url
+   */
+  config_url: string
+}
+
+/**
+ * DdmResultFileView
+ */
+export type DdmResultFileView = {
+  /**
+   * Sha256
+   */
+  sha256: string
+  /**
+   * Size
+   */
+  size: number
+}
+
+/**
+ * DdmTrainingCommandAcceptedView
+ */
+export type DdmTrainingCommandAcceptedView = {
+  command: DdmTrainingCommandView
+  job: UsageJobView
+}
+
+/**
+ * DdmTrainingCommandView
+ *
+ * 一条训练命令的公开事实（DDM 与 VLM 共用同一形状）。
+ *
+ * schema 名由已发布契约冻结（ADR-0003）：这里是同一份 wire 事实，不是 DDM 专属字段。
+ *
+ * 只暴露应用状态、基座原状态/观测时刻/查询诊断与结果登记事实；冻结负载、内部路径、
+ * 媒体身份与消费摘要不进入公开响应。
+ */
+export type DdmTrainingCommandView = {
+  /**
+   * Base Current Step
+   */
+  base_current_step: number | null
+  /**
+   * Base Job Id
+   */
+  base_job_id: string | null
+  /**
+   * Base Progress
+   */
+  base_progress: number | null
+  /**
+   * Base Status
+   */
+  base_status: string | null
+  /**
+   * Base Total Steps
+   */
+  base_total_steps: number | null
+  /**
+   * Cancel Detail
+   */
+  cancel_detail?: string | null
+  /**
+   * Cancel Requested At
+   */
+  cancel_requested_at?: string | null
+  /**
+   * Cancel Requested By
+   */
+  cancel_requested_by?: string | null
+  /**
+   * Cancel Response Message
+   */
+  cancel_response_message?: string | null
+  /**
+   * Cancelled At
+   */
+  cancelled_at?: string | null
+  /**
+   * Cancelled By
+   */
+  cancelled_by?: string | null
+  /**
+   * Created At
+   */
+  created_at: string | null
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Last Observed At
+   */
+  last_observed_at: string | null
+  /**
+   * Observation Failure Code
+   */
+  observation_failure_code: string | null
+  /**
+   * Observation Failure Detail
+   */
+  observation_failure_detail: string | null
+  /**
+   * Request Digest
+   */
+  request_digest: string
+  /**
+   * Result Checkpoint Sha256
+   */
+  result_checkpoint_sha256: string | null
+  /**
+   * Result Checkpoint Size
+   */
+  result_checkpoint_size: number | null
+  /**
+   * Result Config Sha256
+   */
+  result_config_sha256: string | null
+  /**
+   * Result Config Size
+   */
+  result_config_size: number | null
+  /**
+   * Result Failure Code
+   */
+  result_failure_code: string | null
+  /**
+   * Result Failure Detail
+   */
+  result_failure_detail: string | null
+  /**
+   * Result Generation
+   */
+  result_generation: number
+  /**
+   * Result Registered At
+   */
+  result_registered_at: string | null
+  /**
+   * Result Status
+   */
+  result_status: string
+  /**
+   * Status
+   */
+  status: string
+  /**
+   * Updated At
+   */
+  updated_at: string | null
+}
+
+/**
+ * DdmTrainingResultView
+ */
+export type DdmTrainingResultView = {
+  access: DdmResultAccessView | null
+  checkpoint: DdmResultFileView | null
+  /**
+   * Command Id
+   */
+  command_id: string
+  config: DdmResultFileView | null
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * Registered At
+   */
+  registered_at: string | null
+  /**
+   * Status
+   */
+  status: string
+}
+
+/**
  * DesiredTemplateBindingView
  */
 export type DesiredTemplateBindingView = {
@@ -1663,6 +2117,24 @@ export type DeviceSummaryData = {
   inference_hosts?: ResourceSummary | null
   points?: ResourceSummary | null
   stations?: ResourceSummary | null
+}
+
+/**
+ * EdgeImpactSourceView
+ */
+export type EdgeImpactSourceView = {
+  /**
+   * Configuration Revision
+   */
+  configuration_revision: number | null
+  /**
+   * Configuration Sha256
+   */
+  configuration_sha256: string | null
+  /**
+   * Host Id
+   */
+  host_id: string
 }
 
 /**
@@ -1938,6 +2410,64 @@ export type EvidenceReviewBody = {
 }
 
 /**
+ * EvidenceReviewCancelBody
+ *
+ * 取消本人在审占用；只认自己创建的 review_id。
+ */
+export type EvidenceReviewCancelBody = {
+  /**
+   * Review Id
+   */
+  review_id: string
+}
+
+/**
+ * EvidenceReviewHoldBody
+ *
+ * 开始一次在审复核：稳定幂等 ID 与证据代次；不接受其它扩展字段。
+ */
+export type EvidenceReviewHoldBody = {
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Review Id
+   */
+  review_id: string
+}
+
+/**
+ * EvidenceReviewHoldRecord
+ */
+export type EvidenceReviewHoldRecord = {
+  /**
+   * Ended At
+   */
+  ended_at?: string | null
+  /**
+   * Evidence Id
+   */
+  evidence_id: string
+  /**
+   * Generation
+   */
+  generation: string
+  /**
+   * Review Id
+   */
+  review_id: string
+  /**
+   * Reviewer Id
+   */
+  reviewer_id: string
+  /**
+   * Started At
+   */
+  started_at: string
+}
+
+/**
  * EvidenceReviewRecord
  */
 export type EvidenceReviewRecord = {
@@ -1973,7 +2503,7 @@ export type EvidenceReviewRecord = {
  *
  * 中心引用的登记状态；没有“媒体已上传中心”这一类状态（ADR-0012）。
  */
-export type EvidenceStatus = 'pending' | 'available' | 'failed'
+export type EvidenceStatus = 'pending' | 'available' | 'failed' | 'deleted'
 
 /**
  * ExportCameraMediaView
@@ -2083,6 +2613,24 @@ export type FieldError = {
    * Message
    */
   message: string
+}
+
+/**
+ * GlobalRetentionPolicyUpdate
+ */
+export type GlobalRetentionPolicyUpdate = {
+  policy: RetentionPolicyView
+}
+
+/**
+ * GlobalRetentionPolicyView
+ */
+export type GlobalRetentionPolicyView = {
+  policy: RetentionPolicyView
+  /**
+   * Revision
+   */
+  revision: number
 }
 
 /**
@@ -2255,6 +2803,10 @@ export type HostMediaConfigurationView = {
    */
   cameras: Array<ExportCameraMediaView>
   /**
+   * Disk Watermark Percent
+   */
+  disk_watermark_percent?: number | null
+  /**
    * Host Id
    */
   host_id: string
@@ -2288,6 +2840,44 @@ export type HostMediaConfigurationView = {
  */
 export type HostStatus = {
   status: DeviceStatus
+}
+
+/**
+ * ImpactAccessRequest
+ */
+export type ImpactAccessRequest = {
+  /**
+   * Context
+   */
+  context: string
+}
+
+/**
+ * ImpactAggregateView
+ *
+ * 一个时段内一组对象的真实计数；`known_bytes` 为空表示该拥有者无法度量字节。
+ */
+export type ImpactAggregateView = {
+  /**
+   * Earliest
+   */
+  earliest: string | null
+  /**
+   * Known Bytes
+   */
+  known_bytes: number | null
+  /**
+   * Latest
+   */
+  latest: string | null
+  /**
+   * Objects
+   */
+  objects: number
+  /**
+   * Unknown Size Objects
+   */
+  unknown_size_objects: number
 }
 
 /**
@@ -2451,6 +3041,28 @@ export type ItemPageArtifactView = {
 }
 
 /**
+ * ItemPage[AugmentationView]
+ */
+export type ItemPageAugmentationView = {
+  /**
+   * Items
+   */
+  items: Array<AugmentationView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[CameraMediaView]
  */
 export type ItemPageCameraMediaView = {
@@ -2546,6 +3158,28 @@ export type ItemPageDatasetView = {
    * Items
    */
   items: Array<DatasetView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
+ * ItemPage[DdmTrainingCommandView]
+ */
+export type ItemPageDdmTrainingCommandView = {
+  /**
+   * Items
+   */
+  items: Array<DdmTrainingCommandView>
   /**
    * Page
    */
@@ -2971,6 +3605,118 @@ export type NewUser = {
 }
 
 /**
+ * NormalHandoverCreation
+ *
+ * 正常交权请求冻结的工位与双方主机身份。
+ */
+export type NormalHandoverCreation = {
+  /**
+   * From Host Id
+   */
+  from_host_id: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  /**
+   * To Host Id
+   */
+  to_host_id: string
+}
+
+/**
+ * NormalHandoverStatus
+ *
+ * 正常交权请求的持久状态；确认只表示旧机已安全停写。
+ */
+export type NormalHandoverStatus = 'pending' | 'confirmed' | 'cancelled' | 'timed_out' | 'failed'
+
+/**
+ * NormalHandoverView
+ *
+ * 正常交权状态及其冻结租约/命令身份。
+ */
+export type NormalHandoverView = {
+  /**
+   * Cancelled At
+   */
+  cancelled_at: string | null
+  /**
+   * Command Id
+   */
+  command_id: string
+  /**
+   * Confirmed At
+   */
+  confirmed_at: string | null
+  /**
+   * Expires At
+   */
+  expires_at: string
+  /**
+   * Failed At
+   */
+  failed_at: string | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Failure Detail
+   */
+  failure_detail: string | null
+  /**
+   * From Host Id
+   */
+  from_host_id: string
+  /**
+   * Grant Id
+   */
+  grant_id: string
+  /**
+   * Granted At
+   */
+  granted_at?: string | null
+  /**
+   * Granted By
+   */
+  granted_by?: string | null
+  /**
+   * Handover Id
+   */
+  handover_id: string
+  /**
+   * Idempotency Key
+   */
+  idempotency_key: string
+  /**
+   * New Grant Id
+   */
+  new_grant_id?: string | null
+  /**
+   * Requested At
+   */
+  requested_at: string
+  /**
+   * Requested By
+   */
+  requested_by: string
+  /**
+   * Station Id
+   */
+  station_id: string
+  status: NormalHandoverStatus
+  /**
+   * Timed Out At
+   */
+  timed_out_at: string | null
+  /**
+   * To Host Id
+   */
+  to_host_id: string
+}
+
+/**
  * OrderingMode
  *
  * 模板是否要求动作严格按步骤顺序出现。
@@ -2999,7 +3745,11 @@ export type PendingCommandStatus = 'pending' | 'claimed' | 'succeeded' | 'failed
  *
  * 推理机从中心领取的设备命令类型。
  */
-export type PendingCommandType = 'test_connector_connection' | 'reclip_evidence'
+export type PendingCommandType =
+  | 'test_connector_connection'
+  | 'reclip_evidence'
+  | 'stop_execution_handover'
+  | 'control_recording_compression'
 
 /**
  * PendingCommandView
@@ -3229,6 +3979,7 @@ export type ReasonCode =
   | 'ACTION_ID_UNKNOWN'
   | 'INFERENCE_HOST_DOWN'
   | 'RUN_INTERRUPTED'
+  | 'STORAGE_UNAVAILABLE'
   | 'IO_SIGNAL_LOST'
   | 'IO_TIME_UNALIGNED'
   | 'MISSED_STEP'
@@ -3274,6 +4025,32 @@ export type RegisterVlmCandidateInput = {
 }
 
 /**
+ * RequestAugmentationInput
+ *
+ * 只接受已登记标注执行身份，不接受客户端路径、URL 或基座身份。
+ */
+export type RequestAugmentationInput = {
+  /**
+   * Annotation Execution Id
+   */
+  annotation_execution_id: string
+  /**
+   * Frame Drop Iterations
+   */
+  frame_drop_iterations: number
+}
+
+/**
+ * RequestDdmTrainingCommandInput
+ *
+ * 受理一条 DDM 训练命令所需的独立训练/验证来源。
+ */
+export type RequestDdmTrainingCommandInput = {
+  training: DdmInputSelectionInput
+  validation: DdmInputSelectionInput
+}
+
+/**
  * RequestVideoUploadInput
  *
  * 申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。
@@ -3298,6 +4075,18 @@ export type RequestVideoUploadInput = {
    * Source
    */
   source: string
+}
+
+/**
+ * RequestVlmTrainingCommandInput
+ *
+ * 受理一条 VLM 训练命令所需的已通过用途检查。
+ */
+export type RequestVlmTrainingCommandInput = {
+  /**
+   * Usage Check Id
+   */
+  usage_check_id: string
 }
 
 /**
@@ -3340,6 +4129,152 @@ export type ResourceSummary = {
    * Unknown
    */
   unknown: number
+}
+
+/**
+ * RetentionCategory
+ */
+export type RetentionCategory = 'pass' | 'fail' | 'indeterminate'
+
+/**
+ * RetentionFactOwner
+ *
+ * 字段影响事实的拥有者；缺任一拥有者的当前事实即估算不完整。
+ */
+export type RetentionFactOwner = 'evidence' | 'monitor' | 'edge'
+
+/**
+ * RetentionFieldImpactView
+ *
+ * 单个保留字段的影响：有真实计数，或明确不可估算的原因；两者恰有其一。
+ */
+export type RetentionFieldImpactView = {
+  /**
+   * Bytes Basis
+   */
+  bytes_basis: string | null
+  category: RetentionCategory | null
+  exposed: ImpactAggregateView | null
+  /**
+   * Exposed From
+   */
+  exposed_from: string | null
+  /**
+   * Exposed To
+   */
+  exposed_to: string
+  field: RetentionImpactField
+  owner: RetentionFactOwner
+  protected: ImpactAggregateView | null
+  /**
+   * Removes Objects
+   */
+  removes_objects: boolean
+  /**
+   * Savings Unknown
+   */
+  savings_unknown: boolean
+  /**
+   * Source Configurations
+   */
+  source_configurations: Array<EdgeImpactSourceView>
+  /**
+   * Unavailable Reason
+   */
+  unavailable_reason: string | null
+}
+
+/**
+ * RetentionImpactEstimateView
+ *
+ * 一次保留变更的逐字段影响估算；`complete` 为假时不得确认。
+ */
+export type RetentionImpactEstimateView = {
+  /**
+   * Baseline Revision
+   */
+  baseline_revision: number
+  /**
+   * Complete
+   */
+  complete: boolean
+  /**
+   * Estimate Token
+   */
+  estimate_token: string
+  /**
+   * Fields
+   */
+  fields: Array<RetentionFieldImpactView>
+  /**
+   * Incomplete Reasons
+   */
+  incomplete_reasons: Array<string>
+  proposed: RetentionPolicyView
+  /**
+   * Reference Time
+   */
+  reference_time: string
+  /**
+   * Station Id
+   */
+  station_id: string | null
+}
+
+/**
+ * RetentionImpactField
+ *
+ * 一次保留变更影响估算逐字段覆盖的保留字段；八个字段各有一个拥有者口径。
+ */
+export type RetentionImpactField =
+  | 'evidence_pass'
+  | 'evidence_fail'
+  | 'evidence_indeterminate'
+  | 'record_detail'
+  | 'record_compression_age'
+  | 'record_aggregate_age'
+  | 'disposal'
+  | 'local_reported'
+
+/**
+ * RetentionMode
+ */
+export type RetentionMode = 'unset' | 'duration' | 'permanent' | 'discard'
+
+/**
+ * RetentionPolicyMode
+ *
+ * 工位保留组的整组来源；与运行参数同一覆盖模式（§5.19）。
+ */
+export type RetentionPolicyMode = 'follow_global' | 'custom'
+
+/**
+ * RetentionPolicyView
+ *
+ * 完整一组保留参数；缺字段或不合法的一律拒绝。
+ */
+export type RetentionPolicyView = {
+  disposal: RetentionRuleView
+  evidence_fail: RetentionRuleView
+  evidence_indeterminate: RetentionRuleView
+  evidence_pass: RetentionRuleView
+  local_reported: RetentionRuleView
+  record_aggregate_age: RetentionRuleView
+  record_compression_age: RetentionRuleView
+  record_detail: RetentionRuleView
+}
+
+/**
+ * RetentionRuleView
+ *
+ * 一条保留规则的 wire 形状；生效组不出现 `unset`。
+ */
+export type RetentionRuleView = {
+  mode: RetentionMode
+  /**
+   * Seconds
+   */
+  seconds?: number | null
 }
 
 /**
@@ -3515,6 +4450,34 @@ export type StationConfiguration = {
    * Tags
    */
   tags?: Array<string>
+}
+
+/**
+ * StationRetentionUpdate
+ */
+export type StationRetentionUpdate = {
+  mode: RetentionPolicyMode
+  overrides?: RetentionPolicyView | null
+}
+
+/**
+ * StationRetentionView
+ *
+ * 工位保留的默认组、覆盖组与唯一生效组；不逐字段混合。
+ */
+export type StationRetentionView = {
+  default: RetentionPolicyView
+  effective: RetentionPolicyView
+  mode: RetentionPolicyMode
+  overrides: RetentionPolicyView | null
+  /**
+   * Revision
+   */
+  revision: number
+  /**
+   * Station Id
+   */
+  station_id: string
 }
 
 /**
@@ -6178,6 +7141,186 @@ export type SetConnectorStatusResponses = {
 export type SetConnectorStatusResponse =
   SetConnectorStatusResponses[keyof SetConnectorStatusResponses]
 
+export type ClaimRecordingCompressionData = {
+  body?: never
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/device-commands/compression/next'
+}
+
+export type ClaimRecordingCompressionErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Inference host is not allowed to access this command
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimRecordingCompressionError =
+  ClaimRecordingCompressionErrors[keyof ClaimRecordingCompressionErrors]
+
+export type ClaimRecordingCompressionResponses = {
+  /**
+   * Successful Response
+   */
+  200: CompressionClaimView
+  /**
+   * No pending command
+   */
+  204: void
+}
+
+export type ClaimRecordingCompressionResponse =
+  ClaimRecordingCompressionResponses[keyof ClaimRecordingCompressionResponses]
+
+export type CompleteRecordingCompressionData = {
+  body: CompressionObservation
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Command-Claim-Token
+     */
+    'X-Command-Claim-Token': string
+  }
+  path: {
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/device-commands/compression/{command_id}/result'
+}
+
+export type CompleteRecordingCompressionErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Inference host is not allowed to access this command
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CompleteRecordingCompressionError =
+  CompleteRecordingCompressionErrors[keyof CompleteRecordingCompressionErrors]
+
+export type CompleteRecordingCompressionResponses = {
+  /**
+   * Successful Response
+   */
+  200: CompressionCommandView
+}
+
+export type CompleteRecordingCompressionResponse =
+  CompleteRecordingCompressionResponses[keyof CompleteRecordingCompressionResponses]
+
+export type ClaimNextExecutionHandoverCommandData = {
+  body?: never
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/device-commands/execution-handover/next'
+}
+
+export type ClaimNextExecutionHandoverCommandErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Execution handover state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimNextExecutionHandoverCommandError =
+  ClaimNextExecutionHandoverCommandErrors[keyof ClaimNextExecutionHandoverCommandErrors]
+
+export type ClaimNextExecutionHandoverCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+  /**
+   * No normal handover command is pending
+   */
+  204: void
+}
+
+export type ClaimNextExecutionHandoverCommandResponse =
+  ClaimNextExecutionHandoverCommandResponses[keyof ClaimNextExecutionHandoverCommandResponses]
+
 export type ClaimNextDeviceCommandData = {
   body?: never
   headers: {
@@ -6346,6 +7489,81 @@ export type ReadDeviceCommandResponses = {
 }
 
 export type ReadDeviceCommandResponse = ReadDeviceCommandResponses[keyof ReadDeviceCommandResponses]
+
+export type CompleteExecutionHandoverCommandData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Command-Claim-Token
+     */
+    'X-Command-Claim-Token': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path: {
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/device-commands/{command_id}/execution-handover-result'
+}
+
+export type CompleteExecutionHandoverCommandErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Execution handover state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CompleteExecutionHandoverCommandError =
+  CompleteExecutionHandoverCommandErrors[keyof CompleteExecutionHandoverCommandErrors]
+
+export type CompleteExecutionHandoverCommandResponses = {
+  /**
+   * Response Completeexecutionhandovercommand
+   *
+   * Successful Response
+   */
+  200: {
+    [key: string]: unknown
+  }
+}
+
+export type CompleteExecutionHandoverCommandResponse =
+  CompleteExecutionHandoverCommandResponses[keyof CompleteExecutionHandoverCommandResponses]
 
 export type CompleteReclipCommandData = {
   /**
@@ -6705,6 +7923,76 @@ export type CreateEvidenceReclipRequestResponses = {
 export type CreateEvidenceReclipRequestResponse =
   CreateEvidenceReclipRequestResponses[keyof CreateEvidenceReclipRequestResponses]
 
+export type BeginEvidenceReviewData = {
+  body: EvidenceReviewHoldBody
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/review-holds'
+}
+
+export type BeginEvidenceReviewErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type BeginEvidenceReviewError = BeginEvidenceReviewErrors[keyof BeginEvidenceReviewErrors]
+
+export type BeginEvidenceReviewResponses = {
+  /**
+   * Successful Response
+   */
+  200: EvidenceReviewHoldRecord
+}
+
+export type BeginEvidenceReviewResponse =
+  BeginEvidenceReviewResponses[keyof BeginEvidenceReviewResponses]
+
+export type CancelEvidenceReviewData = {
+  body: EvidenceReviewCancelBody
+  path: {
+    /**
+     * Evidence Id
+     */
+    evidence_id: string
+  }
+  query?: never
+  url: '/api/v1/evidence/{evidence_id}/review-holds/cancel'
+}
+
+export type CancelEvidenceReviewErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CancelEvidenceReviewError = CancelEvidenceReviewErrors[keyof CancelEvidenceReviewErrors]
+
+export type CancelEvidenceReviewResponses = {
+  /**
+   * Successful Response
+   */
+  204: void
+}
+
+export type CancelEvidenceReviewResponse =
+  CancelEvidenceReviewResponses[keyof CancelEvidenceReviewResponses]
+
 export type ReadEvidenceReviewsData = {
   body?: never
   path: {
@@ -6951,6 +8239,207 @@ export type ConfirmHandoverResponses = {
 }
 
 export type ConfirmHandoverResponse = ConfirmHandoverResponses[keyof ConfirmHandoverResponses]
+
+export type CreateNormalHandoverData = {
+  body: NormalHandoverCreation
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/execution/normal-handovers'
+}
+
+export type CreateNormalHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Execution state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Request invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CreateNormalHandoverError = CreateNormalHandoverErrors[keyof CreateNormalHandoverErrors]
+
+export type CreateNormalHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  201: NormalHandoverView
+}
+
+export type CreateNormalHandoverResponse =
+  CreateNormalHandoverResponses[keyof CreateNormalHandoverResponses]
+
+export type ReadNormalHandoverData = {
+  body?: never
+  path: {
+    /**
+     * Handover Id
+     */
+    handover_id: string
+  }
+  query?: never
+  url: '/api/v1/execution/normal-handovers/{handover_id}'
+}
+
+export type ReadNormalHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadNormalHandoverError = ReadNormalHandoverErrors[keyof ReadNormalHandoverErrors]
+
+export type ReadNormalHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  200: NormalHandoverView
+}
+
+export type ReadNormalHandoverResponse =
+  ReadNormalHandoverResponses[keyof ReadNormalHandoverResponses]
+
+export type CancelNormalHandoverData = {
+  body?: never
+  path: {
+    /**
+     * Handover Id
+     */
+    handover_id: string
+  }
+  query?: never
+  url: '/api/v1/execution/normal-handovers/{handover_id}/cancellation'
+}
+
+export type CancelNormalHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Execution state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CancelNormalHandoverError = CancelNormalHandoverErrors[keyof CancelNormalHandoverErrors]
+
+export type CancelNormalHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  200: NormalHandoverView
+}
+
+export type CancelNormalHandoverResponse =
+  CancelNormalHandoverResponses[keyof CancelNormalHandoverResponses]
+
+export type GrantNormalHandoverData = {
+  body?: never
+  path: {
+    /**
+     * Handover Id
+     */
+    handover_id: string
+  }
+  query?: never
+  url: '/api/v1/execution/normal-handovers/{handover_id}/grant'
+}
+
+export type GrantNormalHandoverErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Execution record not found
+   */
+  404: ProblemDocument
+  /**
+   * Execution state conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type GrantNormalHandoverError = GrantNormalHandoverErrors[keyof GrantNormalHandoverErrors]
+
+export type GrantNormalHandoverResponses = {
+  /**
+   * Successful Response
+   */
+  200: NormalHandoverView
+}
+
+export type GrantNormalHandoverResponse =
+  GrantNormalHandoverResponses[keyof GrantNormalHandoverResponses]
 
 export type ListInferenceBackendsData = {
   body?: never
@@ -7869,6 +9358,120 @@ export type ExportInferenceHostMediaConfigurationResponses = {
 
 export type ExportInferenceHostMediaConfigurationResponse =
   ExportInferenceHostMediaConfigurationResponses[keyof ExportInferenceHostMediaConfigurationResponses]
+
+export type EnqueueRecordingCompressionData = {
+  body: CompressionInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/recording-compression/commands'
+}
+
+export type EnqueueRecordingCompressionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EnqueueRecordingCompressionError =
+  EnqueueRecordingCompressionErrors[keyof EnqueueRecordingCompressionErrors]
+
+export type EnqueueRecordingCompressionResponses = {
+  /**
+   * Successful Response
+   */
+  202: CompressionCommandView
+}
+
+export type EnqueueRecordingCompressionResponse =
+  EnqueueRecordingCompressionResponses[keyof EnqueueRecordingCompressionResponses]
+
+export type ReadRecordingCompressionCommandData = {
+  body?: never
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/recording-compression/commands/{command_id}'
+}
+
+export type ReadRecordingCompressionCommandErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadRecordingCompressionCommandError =
+  ReadRecordingCompressionCommandErrors[keyof ReadRecordingCompressionCommandErrors]
+
+export type ReadRecordingCompressionCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: CompressionCommandView
+}
+
+export type ReadRecordingCompressionCommandResponse =
+  ReadRecordingCompressionCommandResponses[keyof ReadRecordingCompressionCommandResponses]
 
 export type SetInferenceHostStatusData = {
   body: HostStatus
@@ -9071,6 +10674,478 @@ export type SetPointStatusResponses = {
 }
 
 export type SetPointStatusResponse = SetPointStatusResponses[keyof SetPointStatusResponses]
+
+export type ClaimEvidenceDeletionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims'
+}
+
+export type ClaimEvidenceDeletionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimEvidenceDeletionError =
+  ClaimEvidenceDeletionErrors[keyof ClaimEvidenceDeletionErrors]
+
+export type ClaimEvidenceDeletionResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type ReportEvidenceDeletionResultData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims/result'
+}
+
+export type ReportEvidenceDeletionResultErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReportEvidenceDeletionResultError =
+  ReportEvidenceDeletionResultErrors[keyof ReportEvidenceDeletionResultErrors]
+
+export type ReportEvidenceDeletionResultResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type VerifyEvidenceDeletionData = {
+  /**
+   * Body
+   */
+  body: {
+    [key: string]: unknown
+  }
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Inference-Host-Timestamp
+     */
+    'X-Inference-Host-Timestamp'?: string | null
+    /**
+     * X-Inference-Host-Nonce
+     */
+    'X-Inference-Host-Nonce'?: string | null
+    /**
+     * X-Inference-Host-Signature
+     */
+    'X-Inference-Host-Signature'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/evidence-deletion-claims/verify'
+}
+
+export type VerifyEvidenceDeletionErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type VerifyEvidenceDeletionError =
+  VerifyEvidenceDeletionErrors[keyof VerifyEvidenceDeletionErrors]
+
+export type VerifyEvidenceDeletionResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type ReadRetentionPolicyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy'
+}
+
+export type ReadRetentionPolicyErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadRetentionPolicyError = ReadRetentionPolicyErrors[keyof ReadRetentionPolicyErrors]
+
+export type ReadRetentionPolicyResponses = {
+  /**
+   * Successful Response
+   */
+  200: GlobalRetentionPolicyView
+}
+
+export type ReadRetentionPolicyResponse =
+  ReadRetentionPolicyResponses[keyof ReadRetentionPolicyResponses]
+
+export type UpdateRetentionPolicyData = {
+  body: GlobalRetentionPolicyUpdate
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+    /**
+     * X-Retention-Estimate
+     */
+    'X-Retention-Estimate'?: string | null
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy'
+}
+
+export type UpdateRetentionPolicyErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy conflict, stale estimate or incomplete estimate
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type UpdateRetentionPolicyError =
+  UpdateRetentionPolicyErrors[keyof UpdateRetentionPolicyErrors]
+
+export type UpdateRetentionPolicyResponses = {
+  /**
+   * Successful Response
+   */
+  200: GlobalRetentionPolicyView
+}
+
+export type UpdateRetentionPolicyResponse =
+  UpdateRetentionPolicyResponses[keyof UpdateRetentionPolicyResponses]
+
+export type EstimateRetentionPolicyImpactData = {
+  body: GlobalRetentionPolicyUpdate
+  path?: never
+  query?: never
+  url: '/api/v1/retention/policy/impact-estimate'
+}
+
+export type EstimateRetentionPolicyImpactErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy group is invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EstimateRetentionPolicyImpactError =
+  EstimateRetentionPolicyImpactErrors[keyof EstimateRetentionPolicyImpactErrors]
+
+export type EstimateRetentionPolicyImpactResponses = {
+  /**
+   * Successful Response
+   */
+  200: RetentionImpactEstimateView
+}
+
+export type EstimateRetentionPolicyImpactResponse =
+  EstimateRetentionPolicyImpactResponses[keyof EstimateRetentionPolicyImpactResponses]
+
+export type CheckRetentionReportedImpactAccessData = {
+  body: ImpactAccessRequest
+  path?: never
+  query?: never
+  url: '/api/v1/retention/reported-impact/access-check'
+}
+
+export type CheckRetentionReportedImpactAccessErrors = {
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CheckRetentionReportedImpactAccessError =
+  CheckRetentionReportedImpactAccessErrors[keyof CheckRetentionReportedImpactAccessErrors]
+
+export type CheckRetentionReportedImpactAccessResponses = {
+  /**
+   * Successful Response
+   */
+  200: unknown
+}
+
+export type ReadStationRetentionData = {
+  body?: never
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}'
+}
+
+export type ReadStationRetentionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadStationRetentionError = ReadStationRetentionErrors[keyof ReadStationRetentionErrors]
+
+export type ReadStationRetentionResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationRetentionView
+}
+
+export type ReadStationRetentionResponse =
+  ReadStationRetentionResponses[keyof ReadStationRetentionResponses]
+
+export type UpdateStationRetentionData = {
+  body: StationRetentionUpdate
+  headers: {
+    /**
+     * If-Match
+     */
+    'If-Match': number
+    /**
+     * X-Retention-Estimate
+     */
+    'X-Retention-Estimate'?: string | null
+  }
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}'
+}
+
+export type UpdateStationRetentionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy conflict, stale estimate or incomplete estimate
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type UpdateStationRetentionError =
+  UpdateStationRetentionErrors[keyof UpdateStationRetentionErrors]
+
+export type UpdateStationRetentionResponses = {
+  /**
+   * Successful Response
+   */
+  200: StationRetentionView
+}
+
+export type UpdateStationRetentionResponse =
+  UpdateStationRetentionResponses[keyof UpdateStationRetentionResponses]
+
+export type EstimateStationRetentionImpactData = {
+  body: StationRetentionUpdate
+  path: {
+    /**
+     * Station Id
+     */
+    station_id: string
+  }
+  query?: never
+  url: '/api/v1/retention/stations/{station_id}/impact-estimate'
+}
+
+export type EstimateStationRetentionImpactErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Station not found
+   */
+  404: ProblemDocument
+  /**
+   * Retention policy group is invalid
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EstimateStationRetentionImpactError =
+  EstimateStationRetentionImpactErrors[keyof EstimateStationRetentionImpactErrors]
+
+export type EstimateStationRetentionImpactResponses = {
+  /**
+   * Successful Response
+   */
+  200: RetentionImpactEstimateView
+}
+
+export type EstimateStationRetentionImpactResponse =
+  EstimateStationRetentionImpactResponses[keyof EstimateStationRetentionImpactResponses]
 
 export type ListStationsData = {
   body?: never
@@ -10755,6 +12830,544 @@ export type DownloadDatasetArtifactResponses = {
 export type DownloadDatasetArtifactResponse =
   DownloadDatasetArtifactResponses[keyof DownloadDatasetArtifactResponses]
 
+export type ListDatasetAugmentationsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands'
+}
+
+export type ListDatasetAugmentationsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集或增强命令不存在
+   */
+  404: ProblemDocument
+  /**
+   * 输入、幂等键或命令状态冲突
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListDatasetAugmentationsError =
+  ListDatasetAugmentationsErrors[keyof ListDatasetAugmentationsErrors]
+
+export type ListDatasetAugmentationsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageAugmentationView
+}
+
+export type ListDatasetAugmentationsResponse =
+  ListDatasetAugmentationsResponses[keyof ListDatasetAugmentationsResponses]
+
+export type RequestDatasetAugmentationData = {
+  body: RequestAugmentationInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands'
+}
+
+export type RequestDatasetAugmentationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集或增强命令不存在
+   */
+  404: ProblemDocument
+  /**
+   * 输入、幂等键或命令状态冲突
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type RequestDatasetAugmentationError =
+  RequestDatasetAugmentationErrors[keyof RequestDatasetAugmentationErrors]
+
+export type RequestDatasetAugmentationResponses = {
+  /**
+   * Successful Response
+   */
+  202: AugmentationView
+}
+
+export type RequestDatasetAugmentationResponse =
+  RequestDatasetAugmentationResponses[keyof RequestDatasetAugmentationResponses]
+
+export type ReadDatasetAugmentationData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}'
+}
+
+export type ReadDatasetAugmentationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集或增强命令不存在
+   */
+  404: ProblemDocument
+  /**
+   * 输入、幂等键或命令状态冲突
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadDatasetAugmentationError =
+  ReadDatasetAugmentationErrors[keyof ReadDatasetAugmentationErrors]
+
+export type ReadDatasetAugmentationResponses = {
+  /**
+   * Successful Response
+   */
+  200: AugmentationView
+}
+
+export type ReadDatasetAugmentationResponse =
+  ReadDatasetAugmentationResponses[keyof ReadDatasetAugmentationResponses]
+
+export type CancelPendingDatasetAugmentationData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}/cancel'
+}
+
+export type CancelPendingDatasetAugmentationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集或增强命令不存在
+   */
+  404: ProblemDocument
+  /**
+   * 输入、幂等键或命令状态冲突
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CancelPendingDatasetAugmentationError =
+  CancelPendingDatasetAugmentationErrors[keyof CancelPendingDatasetAugmentationErrors]
+
+export type CancelPendingDatasetAugmentationResponses = {
+  /**
+   * Successful Response
+   */
+  200: AugmentationView
+}
+
+export type CancelPendingDatasetAugmentationResponse =
+  CancelPendingDatasetAugmentationResponses[keyof CancelPendingDatasetAugmentationResponses]
+
+export type ListDdmTrainingCommandsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands'
+}
+
+export type ListDdmTrainingCommandsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListDdmTrainingCommandsError =
+  ListDdmTrainingCommandsErrors[keyof ListDdmTrainingCommandsErrors]
+
+export type ListDdmTrainingCommandsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDdmTrainingCommandView
+}
+
+export type ListDdmTrainingCommandsResponse =
+  ListDdmTrainingCommandsResponses[keyof ListDdmTrainingCommandsResponses]
+
+export type RequestDdmTrainingCommandData = {
+  body: RequestDdmTrainingCommandInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands'
+}
+
+export type RequestDdmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RequestDdmTrainingCommandError =
+  RequestDdmTrainingCommandErrors[keyof RequestDdmTrainingCommandErrors]
+
+export type RequestDdmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  202: DdmTrainingCommandAcceptedView
+}
+
+export type RequestDdmTrainingCommandResponse =
+  RequestDdmTrainingCommandResponses[keyof RequestDdmTrainingCommandResponses]
+
+export type ReadDdmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}'
+}
+
+export type ReadDdmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDdmTrainingCommandError =
+  ReadDdmTrainingCommandErrors[keyof ReadDdmTrainingCommandErrors]
+
+export type ReadDdmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type ReadDdmTrainingCommandResponse =
+  ReadDdmTrainingCommandResponses[keyof ReadDdmTrainingCommandResponses]
+
+export type CancelDdmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/cancel'
+}
+
+export type CancelDdmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type CancelDdmTrainingCommandError =
+  CancelDdmTrainingCommandErrors[keyof CancelDdmTrainingCommandErrors]
+
+export type CancelDdmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type CancelDdmTrainingCommandResponse =
+  CancelDdmTrainingCommandResponses[keyof CancelDdmTrainingCommandResponses]
+
+export type ReadDdmTrainingResultData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/result'
+}
+
+export type ReadDdmTrainingResultErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadDdmTrainingResultError =
+  ReadDdmTrainingResultErrors[keyof ReadDdmTrainingResultErrors]
+
+export type ReadDdmTrainingResultResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingResultView
+}
+
+export type ReadDdmTrainingResultResponse =
+  ReadDdmTrainingResultResponses[keyof ReadDdmTrainingResultResponses]
+
 export type ListDatasetMembersData = {
   body?: never
   path: {
@@ -11804,3 +14417,310 @@ export type ReadVlmCandidateResponses = {
 }
 
 export type ReadVlmCandidateResponse = ReadVlmCandidateResponses[keyof ReadVlmCandidateResponses]
+
+export type ListVlmTrainingCommandsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands'
+}
+
+export type ListVlmTrainingCommandsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ListVlmTrainingCommandsError =
+  ListVlmTrainingCommandsErrors[keyof ListVlmTrainingCommandsErrors]
+
+export type ListVlmTrainingCommandsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageDdmTrainingCommandView
+}
+
+export type ListVlmTrainingCommandsResponse =
+  ListVlmTrainingCommandsResponses[keyof ListVlmTrainingCommandsResponses]
+
+export type RequestVlmTrainingCommandData = {
+  body: RequestVlmTrainingCommandInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands'
+}
+
+export type RequestVlmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type RequestVlmTrainingCommandError =
+  RequestVlmTrainingCommandErrors[keyof RequestVlmTrainingCommandErrors]
+
+export type RequestVlmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  202: DdmTrainingCommandAcceptedView
+}
+
+export type RequestVlmTrainingCommandResponse =
+  RequestVlmTrainingCommandResponses[keyof RequestVlmTrainingCommandResponses]
+
+export type ReadVlmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}'
+}
+
+export type ReadVlmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadVlmTrainingCommandError =
+  ReadVlmTrainingCommandErrors[keyof ReadVlmTrainingCommandErrors]
+
+export type ReadVlmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type ReadVlmTrainingCommandResponse =
+  ReadVlmTrainingCommandResponses[keyof ReadVlmTrainingCommandResponses]
+
+export type CancelVlmTrainingCommandData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/cancel'
+}
+
+export type CancelVlmTrainingCommandErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type CancelVlmTrainingCommandError =
+  CancelVlmTrainingCommandErrors[keyof CancelVlmTrainingCommandErrors]
+
+export type CancelVlmTrainingCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingCommandView
+}
+
+export type CancelVlmTrainingCommandResponse =
+  CancelVlmTrainingCommandResponses[keyof CancelVlmTrainingCommandResponses]
+
+export type ReadVlmTrainingResultData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/result'
+}
+
+export type ReadVlmTrainingResultErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集、视频或上传尝试不存在
+   */
+  404: ProblemDocument
+  /**
+   * 视频当前状态不允许该操作
+   */
+  409: ProblemDocument
+  /**
+   * 请求或视频校验无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+  /**
+   * 训练素材存储或媒体探测暂时不可用
+   */
+  503: ProblemDocument
+}
+
+export type ReadVlmTrainingResultError =
+  ReadVlmTrainingResultErrors[keyof ReadVlmTrainingResultErrors]
+
+export type ReadVlmTrainingResultResponses = {
+  /**
+   * Successful Response
+   */
+  200: DdmTrainingResultView
+}
+
+export type ReadVlmTrainingResultResponse =
+  ReadVlmTrainingResultResponses[keyof ReadVlmTrainingResultResponses]

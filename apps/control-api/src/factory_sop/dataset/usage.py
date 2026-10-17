@@ -7,8 +7,10 @@ import json
 import math
 import re
 import string
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -57,6 +59,14 @@ class VlmReaderInputError(Exception):
 
 class VlmReaderUnavailableError(Exception):
     """NVIDIA VLM 读取器或其运行时依赖暂时不可用。"""
+
+
+# 真实读取器 NvidiaVlmReader 构造 custom_config 的唯一权威默认值（空 vision、空 system_prompt）。
+# 深层只读：内层 vision 也是只读映射，避免任何冻结输入与常量共享可变子结构；
+# 用途检查、冻结参数与读取适配器都从这里取值，防止各自硬编码漂移。
+VLM_CONSUMER_PARAMETERS: Mapping[str, object] = MappingProxyType(
+    {"vision": MappingProxyType({}), "system_prompt": ""}
+)
 
 
 def validate_ddm_input(
@@ -416,7 +426,7 @@ def validate_vlm_input(
         "revision": candidate.revision,
         "kind": candidate.kind.value,
         "action_list_revision": candidate.action_list_revision,
-        "records": [_json_value(record) for record in candidate.records],
+        "records": [json_safe_value(record) for record in candidate.records],
         "media": [
             {
                 "key": media.key,
@@ -450,7 +460,7 @@ def validate_vlm_input(
 def canonical_json(value: object) -> bytes:
     """返回跨运行稳定的 UTF-8 JSON 字节。"""
     return json.dumps(
-        _json_value(value),
+        json_safe_value(value),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -690,11 +700,15 @@ def _validate_sampling_field(
         )
 
 
-def _json_value(value: object) -> object:
-    if isinstance(value, dict):
-        return {str(key): _json_value(item) for key, item in value.items()}
+def json_safe_value(value: object) -> object:
+    """把冻结值规范化为可持久化 JSON：映射、序列与 StrEnum 都还原为纯数据。
+
+    命令负载以 JSONB 落库，冻结时的 ``MappingProxyType``/元组不能直接进入 JSON 编码。
+    """
+    if isinstance(value, Mapping):
+        return {str(key): json_safe_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
+        return [json_safe_value(item) for item in value]
     if hasattr(value, "value") and isinstance(value.value, str):
         return value.value
     return value

@@ -9,6 +9,7 @@ import signal
 import sqlite3
 import ssl
 import threading
+from collections import Counter
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -25,11 +26,14 @@ from nvsop_contracts import (
     STOP_OUTPUT_SEMANTIC_LABEL,
     ConfigurationBundle,
     ConnectionTestOutcome,
+    ExecutionHandoverCommand,
+    ExecutionHandoverResult,
     ReportedExecutionAuthority,
     configuration_to_wire,
 )
 
 from edge_runtime.center_client import CenterClient
+from edge_runtime.compression_commands import CompressionCommandLoop
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
     LocalIsapiConnectorConfiguration,
@@ -58,6 +62,8 @@ from edge_runtime.connectors.writes import (
     WriteAttempted,
     WriteRequest,
 )
+from edge_runtime.evidence_deletion import EvidenceDeletionExecutor
+from edge_runtime.evidence_deletion_transport import HttpEvidenceDeletionTransport
 from edge_runtime.evidence_media import EvidenceMediaConfiguration, EvidenceMediaWorker
 from edge_runtime.evidence_reporting import EvidenceReferenceReconciler
 from edge_runtime.judgment.model import HostInstant, HostLiveness
@@ -84,6 +90,10 @@ from edge_runtime.media import (
     RecordingMode,
     validate_sop_camera_bindings,
 )
+from edge_runtime.recording_compression import (
+    RecordingCompressionConfiguration,
+    RecordingCompressionWorker,
+)
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.reporting_transport import HttpDecisionReportTransport
 from edge_runtime.runtime_configuration import (
@@ -101,6 +111,7 @@ from edge_runtime.station_runtime import (
     StationInputSource,
     StationRuntimeConfiguration,
 )
+from edge_runtime.storage_health import DiskHealthWatch
 from edge_runtime.stream_health import StreamFact, StreamHealthEvent
 from edge_runtime.supervisor.delegated_commands import (
     ConnectionTestCommandRunner,
@@ -114,7 +125,15 @@ from edge_runtime.supervisor.delegated_transport import (
     HttpCommandTransport,
     HttpReclipCommandTransport,
 )
-from edge_runtime.supervisor.inputs import StreamHealthObserved
+from edge_runtime.supervisor.execution_handover import (
+    AutonomousStationStopper,
+    ExecutionHandoverCommandRunner,
+)
+from edge_runtime.supervisor.execution_handover_transport import (
+    ExecutionHandoverCommandLoop,
+    HttpExecutionHandoverTransport,
+)
+from edge_runtime.supervisor.inputs import StorageHealthObserved, StreamHealthObserved
 from edge_runtime.supervisor.reclip import (
     ReclipCommandRunner,
     ReclipEvidenceExecutor,
@@ -294,6 +313,12 @@ class StationOutputWriteGate:
                 ),
             )
         authority = self._leases.status(self._station_id, now=self._clock())
+        if authority.write_stopped:
+            # 正常交权确认前置: fence 是持久事实, 优先于租约剩余期限。
+            return Refused(
+                reason=WriteRefusal.WRITE_STOPPED,
+                detail=authority.detail or f"工位 {self._station_id} 已停止写入",
+            )
         if authority.authorized:
             return None
         reason = (
@@ -437,10 +462,12 @@ class AutonomousStation:
         output_dispatchers: Mapping[str, OutputDispatcher] | None = None,
         output_points: Mapping[str, tuple[OutputPoint, ...]] | None = None,
         write_lifecycle: StationWriteLifecycle | None = None,
+        write_fenced: Callable[[], bool] | None = None,
         diagnostics: Callable[[WriteAttempted], None] | None = None,
         output_disposal_targets: Mapping[str, tuple[str, OutputPoint]] | None = None,
         output_report_host_id: str | None = None,
         output_write_timeout: float | None = None,
+        disk_health: DiskHealthWatch | None = None,
     ) -> None:
         self._supervisor = supervisor
         self._source = source
@@ -449,10 +476,15 @@ class AutonomousStation:
         self._output_dispatchers = dict(output_dispatchers or {})
         self._output_points = dict(output_points or {})
         self._write_lifecycle = write_lifecycle or StationWriteLifecycle()
+        self._write_fenced = write_fenced
+        self._run_state_lock = threading.RLock()
+        self._run_finished = threading.Event()
+        self._run_finished.set()
         self._diagnostics = diagnostics
         self._output_disposal_targets = dict(output_disposal_targets or {})
         self._output_report_host_id = output_report_host_id
         self._output_write_timeout = output_write_timeout
+        self._disk_health = disk_health
 
     @property
     def station_id(self) -> str | None:
@@ -578,13 +610,30 @@ class AutonomousStation:
         self._write_lifecycle.stop()
         self._source.close()
 
+    def stop_for_handover(self) -> None:
+        """停止新判定/写入并等待当前运行流和在途物理写入全部结束。"""
+        with self._run_state_lock:
+            self._write_lifecycle.stop()
+        self.close()
+        for dispatcher in self._output_dispatchers.values():
+            dispatcher.wait_for_idle()
+        self._run_finished.wait()
+
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
         """消费输入、按能力声明轮询连接器, 并在切换或停机时结束当前实例。"""
+        with self._run_state_lock:
+            if self._write_lifecycle.stopped or (
+                self._write_fenced is not None and self._write_fenced()
+            ):
+                self.close()
+                return
+            self._run_finished.clear()
         try:
-            while not should_stop():
+            while not should_stop() and not self._write_lifecycle.stopped:
                 supervisor = self._supervisor
                 source = self._source
                 connector_runtimes = self._connector_runtimes
+                self._poll_storage_health(supervisor)
                 self._poll_due(
                     supervisor=supervisor,
                     connector_runtimes=connector_runtimes,
@@ -593,9 +642,11 @@ class AutonomousStation:
                     timeout=self._next_input_timeout(
                         supervisor=supervisor,
                         connector_runtimes=connector_runtimes,
+                        disk_health=self._disk_health,
                     )
                 )
-                if should_stop():
+                self._poll_storage_health(supervisor)
+                if should_stop() or self._write_lifecycle.stopped:
                     break
                 if isinstance(arriving, InputWaitExpired):
                     self._execute_output_disposals(supervisor.wake(host=HostLiveness.ALIVE))
@@ -624,17 +675,34 @@ class AutonomousStation:
                     connector_runtimes=connector_runtimes,
                 )
             self._execute_output_disposals(self._supervisor.interrupt())
+        except sqlite3.Error:
+            _logger.exception(
+                "edge.storage.write_failed station=%s; judgment stopped", self._station_id
+            )
+            raise
         finally:
-            self.close()
+            try:
+                self.close()
+            finally:
+                self._run_finished.set()
+
+    def _poll_storage_health(self, supervisor: StationSupervisor) -> None:
+        if self._disk_health is not None:
+            for event in self._disk_health.poll(now=monotonic()):
+                self._execute_output_disposals(supervisor.receive(StorageHealthObserved(event)))
 
     @staticmethod
     def _next_input_timeout(
         *,
         supervisor: StationSupervisor,
         connector_runtimes: tuple[ConnectorRuntime, ...],
+        disk_health: DiskHealthWatch | None = None,
     ) -> float | None:
         timeout = supervisor.timeout()
         now = monotonic()
+        if disk_health is not None:
+            disk_timeout = disk_health.timeout(now=now)
+            timeout = disk_timeout if timeout is None else min(timeout, disk_timeout)
         for runtime in connector_runtimes:
             due = runtime.next_due(now=now)
             if due is None:
@@ -759,6 +827,28 @@ class _ReportLifecycleRunner:
                             status.last_failed_queue_id,
                             status.limit,
                         )
+                # 本地已上报裁剪属于本机保留生命周期: 不依赖中心成功, 离线仍按最后确认配置推进。
+                # SQLite 故障不被上报失败吞掉, 保持本地状态的致命语义。
+                reclamation = self._runtime._state.reclaim_reported(
+                    now=datetime.now(UTC), limit=_REPORT_WORK_BUDGET
+                )
+                if reclamation.deleted or reclamation.skipped:
+                    scopes = ",".join(
+                        f"{row.queue}:deleted={row.deleted}:skipped={row.skipped}:range="
+                        + (
+                            "none"
+                            if row.queue_id_range is None
+                            else f"{row.queue_id_range[0]}-{row.queue_id_range[1]}"
+                        )
+                        for row in reclamation.rows
+                    )
+                    _logger.info(
+                        "edge.local_reclamation.summary deleted=%s skipped=%s scopes=%s reasons=%s",
+                        reclamation.deleted,
+                        reclamation.skipped,
+                        scopes,
+                        ",".join(reclamation.skip_reasons),
+                    )
                 if self._stop_requested():
                     return
                 self._runtime._report_wake.wait(_REPORT_RETRY_INTERVAL_SECONDS)
@@ -859,13 +949,64 @@ class _RuntimeCycleRunner:
             return
         evidence.run_forever(should_stop=self._stop_requested)
 
+    def _run_compression_commands(self) -> None:
+        commands = self._runtime._compression_commands
+        if commands is not None:
+            commands.run_forever(should_stop=self._stop_requested)
+
+    def _run_compression(self) -> None:
+        compression = self._runtime._compression
+        if compression is None:
+            return
+        compression.run_forever(should_stop=self._stop_requested)
+
     def _run_evidence_registration(self) -> None:
         worker = self._runtime._evidence_registration
         if worker is not None:
             worker.run_forever(should_stop=self._stop_requested, limit=_REPORT_WORK_BUDGET)
 
+    def _run_evidence_deletion(self) -> None:
+        """驱动 #206 删除执行器: 有界 drain, 未知执行状态停止删除而不影响判定。"""
+        executor = self._runtime._evidence_deletion
+        if executor is None:
+            return
+        while not self._stop_requested():
+            started_at = datetime.now(UTC).isoformat()
+            try:
+                results = executor.drain(limit=_REPORT_WORK_BUDGET)
+            except Exception as error:
+                _logger.exception(
+                    "edge.evidence_deletion.failed status=stopped started_at=%s "
+                    "finished_at=%s scope=registered_evidence deleted=unknown "
+                    "skipped=unknown failed=unknown reason=execution_state_unknown error_type=%s",
+                    started_at,
+                    datetime.now(UTC).isoformat(),
+                    type(error).__name__,
+                )
+                # 中心不可达已由执行器返回跳过; 未处理异常可能是 unlink 后账本失败。
+                # 停止本周期的删除线程, 保留账本供修复后重启收敛, 不影响实时判定。
+                return
+            else:
+                _logger.info(
+                    "edge.evidence_deletion.sweep started_at=%s finished_at=%s "
+                    "scope=%s deleted=%s skipped=%s failed=%s reasons=%s",
+                    started_at,
+                    datetime.now(UTC).isoformat(),
+                    tuple(item.evidence_id for item in results),
+                    sum(item.outcome == "deleted" for item in results),
+                    sum(item.outcome == "skipped" for item in results),
+                    sum(item.outcome not in ("deleted", "skipped") for item in results),
+                    dict(Counter(item.reason for item in results)),
+                )
+            self._cycle_stop.wait(_EVIDENCE_DELETION_INTERVAL_SECONDS)
+
     def _run_reclip(self) -> None:
         loop = self._runtime._reclip_loop
+        if loop is not None:
+            loop.run_forever(should_stop=self._stop_requested)
+
+    def _run_execution_handover(self) -> None:
+        loop = self._runtime._execution_handover_loop
         if loop is not None:
             loop.run_forever(should_stop=self._stop_requested)
 
@@ -952,6 +1093,22 @@ class _RuntimeCycleRunner:
             *(
                 [
                     threading.Thread(
+                        target=self._guard,
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "compression_commands", self._run_compression_commands
+                            ),
+                        ),
+                        name="edge-compression-commands",
+                        daemon=True,
+                    )
+                ]
+                if runtime._compression_commands is not None
+                else []
+            ),
+            *(
+                [
+                    threading.Thread(
                         target=self._run_media,
                         name="edge-media-runtime",
                         daemon=True,
@@ -976,6 +1133,18 @@ class _RuntimeCycleRunner:
                 [
                     threading.Thread(
                         target=self._guard,
+                        args=(self._run_compression,),
+                        name="edge-recording-compression",
+                        daemon=True,
+                    )
+                ]
+                if runtime._compression is not None
+                else []
+            ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
                         args=(
                             lambda: self._isolate_center_worker(
                                 "evidence_registration", self._run_evidence_registration
@@ -992,12 +1161,44 @@ class _RuntimeCycleRunner:
                 [
                     threading.Thread(
                         target=self._guard,
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "evidence_deletion", self._run_evidence_deletion
+                            ),
+                        ),
+                        name="edge-evidence-deletion",
+                        daemon=True,
+                    )
+                ]
+                if runtime._evidence_deletion is not None
+                else []
+            ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
                         args=(lambda: self._isolate_center_worker("reclip", self._run_reclip),),
                         name="edge-reclip-commands",
                         daemon=True,
                     )
                 ]
                 if runtime._reclip_loop is not None
+                else []
+            ),
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "execution_handover", self._run_execution_handover
+                            ),
+                        ),
+                        name="edge-execution-handover",
+                        daemon=True,
+                    )
+                ]
+                if runtime._execution_handover_loop is not None
                 else []
             ),
             threading.Thread(
@@ -1059,8 +1260,12 @@ class AutonomousRuntime:
         state: LocalState,
         media: MediaRuntime | None = None,
         evidence: EvidenceMediaWorker | None = None,
+        compression: RecordingCompressionWorker | None = None,
+        compression_commands: CompressionCommandLoop | None = None,
         evidence_registration: EvidenceReferenceReconciler | None = None,
+        evidence_deletion: EvidenceDeletionExecutor | None = None,
         reclip_loop: ReclipCommandLoop | None = None,
+        execution_handover_loop: ExecutionHandoverCommandLoop | None = None,
         report_reconciler: HostReportReconciler | None = None,
         report_wake: threading.Event | None = None,
         configuration_sync: ConfigurationSynchronizer | None = None,
@@ -1078,8 +1283,12 @@ class AutonomousRuntime:
         self._state = state
         self._media = media
         self._evidence = evidence
+        self._compression = compression
+        self._compression_commands = compression_commands
         self._evidence_registration = evidence_registration
+        self._evidence_deletion = evidence_deletion
         self._reclip_loop = reclip_loop
+        self._execution_handover_loop = execution_handover_loop
         self._report_reconciler = report_reconciler
         self._report_wake = report_wake or threading.Event()
         self._configuration_sync = configuration_sync
@@ -1106,6 +1315,16 @@ class AutonomousRuntime:
     def output_dispatchers(self) -> Mapping[str, OutputDispatcher]:
         with self._lock:
             return dict(self._output_dispatchers)
+
+    @property
+    def evidence_deletion(self) -> EvidenceDeletionExecutor | None:
+        """本机证据删除执行器; 调度归 #207, 本属性提供可调用的生产接缝。"""
+        return self._evidence_deletion
+
+    @property
+    def compression(self) -> RecordingCompressionWorker | None:
+        """本机管理使用已装配的唯一压缩 worker 控制/查询任务, 不新建执行者。"""
+        return self._compression
 
     @property
     def configuration(self) -> RuntimeConfiguration | None:
@@ -1264,6 +1483,10 @@ _REPORT_WORK_BUDGET = 32
 _REPORT_RETRY_INTERVAL_SECONDS = 1.0
 _CENTER_WORKER_RESTART_BASE_SECONDS = 0.5
 _CENTER_WORKER_RESTART_MAX_SECONDS = 30.0
+# 压缩是低优先级后台任务: 两轮之间至少等待这么久, 避免反复扫描整个录像目录。
+_RECORDING_COMPRESSION_INTERVAL_SECONDS = 30.0
+# 本机证据回收是低频后台任务: 两轮之间至少等待这么久, 批次大小由执行器自身契约限制。
+_EVIDENCE_DELETION_INTERVAL_SECONDS = 30.0
 
 
 def _log_write_attempt(event: WriteAttempted) -> None:
@@ -1405,6 +1628,11 @@ def _build_runtime_composition(
                 write_state = "stopped"
                 reason_code = "write_stopped"
                 detail = f"工位 {station_id} 已停止写入"
+            elif authority.write_stopped:
+                # 正常交权确认前的持久停写: 不同于生命周期停止, 重启后仍然成立。
+                write_state = "stopped"
+                reason_code = "execution_handover_write_fence"
+                detail = authority.detail
             elif authority.state is ExecutionLeaseState.ACTIVE:
                 write_state = "enabled"
                 reason_code = None
@@ -1525,6 +1753,21 @@ def _build_runtime_composition(
                 )
             if sound_light_target is not None:
                 output_disposal_targets[SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL] = sound_light_target
+            storage_paths: dict[str, Path] = {}
+            if config.local_state_path is not None:
+                storage_paths["local_state"] = config.local_state_path.parent
+            if config.media is not None and any(
+                camera.station_id == station_config.station_id
+                and camera.recording_mode is RecordingMode.CONTINUOUS
+                for camera in config.media.cameras
+            ):
+                storage_paths["recording"] = config.media.recording_directory
+            if config.evidence is not None:
+                storage_paths["evidence"] = config.evidence.evidence_directory
+
+            def write_fenced(station_id: str = station_config.station_id) -> bool:
+                return leases.status(station_id, now=time()).write_stopped
+
             stations.append(
                 AutonomousStation(
                     station_id=station_config.station_id,
@@ -1548,10 +1791,17 @@ def _build_runtime_composition(
                         for connector_id in station_binding.connector_ids
                     },
                     write_lifecycle=write_lifecycles[station_config.station_id],
+                    write_fenced=write_fenced,
                     diagnostics=_log_write_attempt,
                     output_disposal_targets=output_disposal_targets,
                     output_report_host_id=config.host_id,
                     output_write_timeout=config.command_timeout,
+                    disk_health=DiskHealthWatch(
+                        paths=storage_paths,
+                        configuration=config.disk_health,
+                        # 重启/配置切换不能解除滞回区间内的既有失效。
+                        initially_impaired=True,
+                    ),
                 )
             )
     except Exception:
@@ -1705,6 +1955,51 @@ def build_reclip_loop(
     )
 
 
+def build_execution_handover_loop(
+    *,
+    center_url: str,
+    host_id: str,
+    host_private_key: str,
+    command_timeout: float,
+    command_poll_interval: float,
+    state: LocalState,
+    stations: Callable[[], tuple[AutonomousStation, ...]],
+    ssl_context: ssl.SSLContext | None = None,
+    sleep_fn: Callable[[float], None] = sleep,
+) -> ExecutionHandoverCommandLoop:
+    """装配生产正常交权停机循环: 专用签名传输 + 真实工位停机执行器。
+
+    stopper 按当前活动工位解析: 每次领取后实时读取, 配置切换后的工位对象即时生效。
+    """
+
+    def execute(command: ExecutionHandoverCommand) -> ExecutionHandoverResult:
+        leases = state.execution_leases()
+        runner = ExecutionHandoverCommandRunner(
+            stopper=AutonomousStationStopper(
+                {station.station_id or "": station for station in stations()},
+                leases,
+            ),
+            leases=leases,
+            clock=time,
+        )
+        return runner.execute(command)
+
+    return ExecutionHandoverCommandLoop(
+        transport=HttpExecutionHandoverTransport(
+            client=CenterClient(
+                center_url=center_url,
+                host_id=host_id,
+                host_private_key=host_private_key,
+                timeout=command_timeout,
+                ssl_context=ssl_context,
+            )
+        ),
+        executor=execute,
+        poll_interval=command_poll_interval,
+        sleep_fn=sleep_fn,
+    )
+
+
 def _evidence_source_factory(
     media: MediaRuntimeConfiguration | None,
 ) -> Callable[[str], EvidenceSource | None] | None:
@@ -1818,6 +2113,27 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             if media_configuration is not None and evidence_configuration is not None
             else None
         )
+        compression_worker = (
+            RecordingCompressionWorker(
+                configuration=RecordingCompressionConfiguration(
+                    recording_directory=media_configuration.recording_directory,
+                    ffmpeg_binary=media_configuration.ffmpeg_binary,
+                    # 压缩复用本机证据切片已拥有的探测二进制/超时/录像时区, 不复制第二份配置。
+                    ffprobe_binary=evidence_configuration.ffprobe_binary,
+                    compression_age_seconds=(media_configuration.recording_compression_age_seconds),
+                    segment_duration_seconds=(media_configuration.record_segment_duration_seconds),
+                    crf=media_configuration.recording_compression_crf,
+                    readrate=media_configuration.recording_compression_readrate,
+                    timeout_seconds=evidence_configuration.slice_timeout_seconds,
+                    recording_timezone=evidence_configuration.recording_timezone,
+                ),
+                interval=_RECORDING_COMPRESSION_INTERVAL_SECONDS,
+            )
+            if media_configuration is not None
+            and evidence_configuration is not None
+            and media_configuration.recording_compression_enabled
+            else None
+        )
         reclip_loop = (
             build_reclip_loop(
                 center_url=config.center_url,
@@ -1834,12 +2150,28 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             if media_configuration is not None and evidence_configuration is not None
             else None
         )
+        execution_handover_loop = build_execution_handover_loop(
+            center_url=config.center_url,
+            host_id=config.host_id,
+            host_private_key=config.host_private_key,
+            command_timeout=config.command_timeout,
+            command_poll_interval=config.command_poll_interval,
+            state=state,
+            stations=lambda: runtime.stations,
+            ssl_context=config.ssl_context,
+        )
         runtime = AutonomousRuntime(
             command_loop=composition.command_loop,
             stations=composition.stations,
             state=state,
             media=MediaRuntime(config.media) if config.media is not None else None,
             evidence=evidence_worker,
+            compression=compression_worker,
+            compression_commands=CompressionCommandLoop(
+                client=_center_client(config),
+                worker=compression_worker,
+                interval=config.command_poll_interval,
+            ),
             evidence_registration=(
                 EvidenceReferenceReconciler(
                     state=state,
@@ -1851,7 +2183,20 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                 if evidence_worker is not None and evidence_configuration is not None
                 else None
             ),
+            evidence_deletion=(
+                EvidenceDeletionExecutor(
+                    state=state,
+                    host_id=config.host_id,
+                    evidence_directory=evidence_configuration.evidence_directory,
+                    transport=HttpEvidenceDeletionTransport(
+                        client=_center_client(config), host_id=config.host_id
+                    ),
+                )
+                if evidence_configuration is not None
+                else None
+            ),
             reclip_loop=reclip_loop,
+            execution_handover_loop=execution_handover_loop,
             report_reconciler=composition.report_reconciler,
             report_wake=report_wake,
             configuration_sync=configuration_sync,

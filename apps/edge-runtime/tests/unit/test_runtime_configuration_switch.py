@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from collections.abc import Callable
+from datetime import datetime
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import cast
@@ -11,8 +12,10 @@ from nvsop_contracts import ConfigurationBundle
 
 from edge_runtime.configuration_sync import ConfigurationSynchronizer, ConfigurationSyncResult
 from edge_runtime.connectors.runtime import ConnectorRuntimeSet
+from edge_runtime.local_state import DEFAULT_RECLAIM_LIMIT, ReclaimedQueue, ReportedReclamation
 from edge_runtime.local_state.store import LocalState, QueueCapacityError, QueueStatus
 from edge_runtime.media import MediaRuntime
+from edge_runtime.recording_compression import RecordingCompressionWorker
 from edge_runtime.reporting import HostReportReconciler
 from edge_runtime.runtime import (
     AutonomousRuntime,
@@ -33,9 +36,18 @@ class _CommandLoop:
 class _State:
     def __init__(self) -> None:
         self.closed = False
+        self.reclaim_calls = 0
+        self.reclamation = ReportedReclamation(rows=())
 
     def queue_status(self) -> tuple[QueueStatus, ...]:
         return ()
+
+    def reclaim_reported(
+        self, *, now: datetime, limit: int = DEFAULT_RECLAIM_LIMIT
+    ) -> ReportedReclamation:
+        del now, limit
+        self.reclaim_calls += 1
+        return self.reclamation
 
     def close(self) -> None:
         self.closed = True
@@ -240,6 +252,17 @@ class _BrokenStoreSynchronizer(_Synchronizer):
         raise sqlite3.OperationalError("synthetic local configuration store failure")
 
 
+class _CompressionWorker:
+    """记录 run_forever 是否被调用的替身; 真实压缩行为由录像压缩集成测试覆盖。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run_forever(self, *, should_stop: Callable[[], bool]) -> None:
+        del should_stop
+        self.calls += 1
+
+
 class RuntimeConfigurationSwitchTest(unittest.TestCase):
     def _run_until(
         self, runtime: AutonomousRuntime, ready: Event
@@ -291,6 +314,57 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
 
         self.assertTrue(reached)
         self.assertEqual(errors, [])
+
+    def test_runtime_loop_logs_skip_only_reclamation_scope_without_center(self) -> None:
+        state = _State()
+        state.reclamation = ReportedReclamation(
+            rows=(
+                ReclaimedQueue(
+                    queue="health",
+                    deleted=0,
+                    skipped=2,
+                    skip_reasons=("acknowledgement_unknown", "retention_protected"),
+                    queue_id_range=(7, 9),
+                ),
+            )
+        )
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, state),
+        )
+        stop = Event()
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                runtime.run_forever(should_stop=stop.is_set)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = Thread(target=run)
+        with self.assertLogs("edge_runtime", level="INFO") as logs:
+            thread.start()
+            deadline = monotonic() + 5.0
+            while monotonic() < deadline and not any(
+                "edge.local_reclamation.summary" in message for message in logs.output
+            ):
+                sleep(0.01)
+            stop.set()
+            thread.join(5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([], errors)
+        self.assertGreaterEqual(state.reclaim_calls, 1)
+        summary = next(
+            message for message in logs.output if "edge.local_reclamation.summary" in message
+        )
+        # 跳过非空也要记录每队列范围/删除/跳过/原因, 不声称物理磁盘回收。
+        self.assertIn("health", summary)
+        self.assertIn("range=7-9", summary)
+        self.assertIn("deleted=0", summary)
+        self.assertIn("skipped=2", summary)
+        self.assertIn("acknowledgement_unknown", summary)
 
     def test_configuration_worker_defect_restarts_without_stopping_stations(self) -> None:
         synchronizer = _FailingOnceSynchronizer()
@@ -489,6 +563,33 @@ class RuntimeConfigurationSwitchTest(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
         self.assertTrue(state.closed)
+
+    def test_cycle_runner_drives_the_configured_recording_compression_worker(self) -> None:
+        worker = _CompressionWorker()
+        runtime = AutonomousRuntime(
+            command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+            stations=(),
+            state=cast(LocalState, _State()),
+            compression=cast(RecordingCompressionWorker, worker),
+        )
+        runner = _RuntimeCycleRunner(
+            runtime=runtime, runtime_stop=Event(), should_stop=lambda: True
+        )
+
+        runner._run_compression()
+
+        self.assertEqual(1, worker.calls)
+        # 未配置压缩的运行时没有可驱动的 worker, 启动任务时安静返回。
+        bare = _RuntimeCycleRunner(
+            runtime=AutonomousRuntime(
+                command_loop=cast(ConnectionTestCommandLoop, _CommandLoop()),
+                stations=(),
+                state=cast(LocalState, _State()),
+            ),
+            runtime_stop=Event(),
+            should_stop=lambda: True,
+        )
+        bare._run_compression()
 
     def test_media_start_failure_is_logged_before_existing_retry(self) -> None:
         state = _State()

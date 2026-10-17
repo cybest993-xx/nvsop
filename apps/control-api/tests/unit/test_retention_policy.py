@@ -32,6 +32,9 @@ class FakeRetentionPolicyRepository:
     def get_global(self) -> RetentionPolicyState | None:
         return self.state
 
+    def lock_current(self) -> RetentionPolicyState | None:
+        return self.state
+
     def replace_if_current(self, *, expected_revision: int, value: RetentionPolicyState) -> bool:
         self.replace_calls += 1
         if (0 if self.state is None else self.state.revision) != expected_revision:

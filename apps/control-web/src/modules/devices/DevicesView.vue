@@ -38,7 +38,10 @@ import {
 import CameraMediaPanel from './CameraMediaPanel.vue'
 import ConnectionTestControl from './ConnectionTestControl.vue'
 import ForceHandoverPanel from './ForceHandoverPanel.vue'
+import NormalHandoverPanel from './NormalHandoverPanel.vue'
 import PointManagement from './PointManagement.vue'
+import RecordingCompressionPanel from './RecordingCompressionPanel.vue'
+import StationRetentionPanel from './StationRetentionPanel.vue'
 import StationRuntimePanel from './StationRuntimePanel.vue'
 import StationTemplateConfiguration from './StationTemplateConfiguration.vue'
 
@@ -66,6 +69,9 @@ const mayViewStations = computed(() => session.may('device.station.view'))
 const mayForceHandover = computed(() => session.may('execution.handover.edit'))
 // 以空数组 v-for 挂载：无权限时不产生占位注释，设备页既有 markup 快照不变。
 const forceHandoverPanels = computed(() => (mayForceHandover.value ? ['force-handover'] : []))
+const mayViewRetention = computed(() => session.may('retention.policy.view'))
+// 同一约定：无权限时不产生占位注释，设备页既有 markup 快照不变。
+const retentionPanels = computed(() => (mayViewRetention.value ? ['station-retention'] : []))
 const mayEditConnectors = computed(() => session.may('device.connector.edit'))
 const mayDeleteConnectors = computed(() => session.may('device.connector.delete'))
 const hostNames = computed(() => new Map(hosts.value.map((host) => [host.id, host.name])))
@@ -392,6 +398,15 @@ onMounted(load)
 
     <StationRuntimePanel :stations="stations" />
 
+    <StationRetentionPanel v-for="panel in retentionPanels" :key="panel" :stations="stations" />
+
+    <NormalHandoverPanel
+      v-for="panel in forceHandoverPanels"
+      :key="`normal-${panel}`"
+      :stations="stations"
+      :hosts="hosts"
+    />
+
     <ForceHandoverPanel
       v-for="panel in forceHandoverPanels"
       :key="panel"
@@ -399,6 +414,11 @@ onMounted(load)
       :hosts="hosts"
     />
 
+    <RecordingCompressionPanel
+      v-for="key in mayViewHosts ? ['compression'] : []"
+      :key="key"
+      :hosts="hosts"
+    />
     <p v-if="failure" class="devices__failure" role="alert">{{ failure }}</p>
     <p v-if="loading" class="devices__loading">正在加载连接器…</p>
 

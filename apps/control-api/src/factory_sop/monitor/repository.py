@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from factory_sop.monitor.model import (
     MirroredDecision,
@@ -13,6 +14,7 @@ from factory_sop.monitor.model import (
     MirroredSopInstance,
     MirroredViolation,
 )
+from factory_sop.retention.api import InstanceRetentionFact, StationUsage
 from nvsop_contracts import ReportedDisposal
 
 
@@ -106,4 +108,37 @@ class MonitorStreamSource(Protocol):
 
     def wait_for_wakeup(self, *, timeout: float) -> bool:
         """等待提交后提示；False 只表示本次等待超时。"""
+        ...
+
+
+class MonitorImpactRepository(Protocol):
+    """保留变更影响估算所需的 monitor 镜像事实只读计数 seam；不读 evidence/retention 表。"""
+
+    def instance_retention_facts(
+        self, *, instance_ids: tuple[tuple[UUID, UUID, int], ...]
+    ) -> tuple[InstanceRetentionFact, ...]:
+        """返回这些实例的判定、锁存违规与真实结案事实。"""
+        ...
+
+    def record_impact(
+        self,
+        *,
+        station_id: str | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> tuple[StationUsage, ...]:
+        """按工位返回落在该时段的判定/健康/观测记录计数。
+
+        属于未结案实例（没有真实 ``closed_at``）的记录，以及实例未知的记录，都归入受保护一类。
+        """
+        ...
+
+    def disposal_impact(
+        self,
+        *,
+        station_id: str | None,
+        exposed_from: datetime | None,
+        exposed_to: datetime,
+    ) -> tuple[StationUsage, ...]:
+        """按工位返回落在该时段的处置记录计数；无明确结案事实的已锁存违规单列为受保护。"""
         ...

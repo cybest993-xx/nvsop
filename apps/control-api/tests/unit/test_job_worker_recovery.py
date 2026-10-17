@@ -44,11 +44,22 @@ def test_stale_recovery_preserves_existing_worker_timeout(
             recovered.append((job_type, stale_after_seconds))
             return 0
 
-        def pending(self, *, limit: int) -> tuple[object, ...]:
+        def pending(
+            self,
+            *,
+            limit: int,
+            configured_training_types: frozenset[JobType] = frozenset(),
+            include_augmentation: bool = False,
+        ) -> tuple[object, ...]:
             assert limit == 100
+            assert configured_training_types == frozenset()
+            assert include_augmentation is False
             return ()
 
     class FakeDispatcher:
+        configured_training_types: frozenset[JobType] = frozenset()
+        augmentation_configured = False
+
         async def dispatch_async(self, job_id: object) -> None:
             raise AssertionError(f"no pending jobs expected: {job_id}")
 
@@ -96,7 +107,12 @@ def test_worker_preserves_existing_uniform_timeout(
         usage_runtime=cast(Any, object()),
         artifact_executor=cast(Any, object()),
         annotation_runtime=cast(Any, object()),
+        training_executors={
+            JobType.DATASET_DDM_TRAINING: cast(Any, object()),
+            JobType.DATASET_VLM_TRAINING: cast(Any, object()),
+        },
         current_caller_resolver=cast(Any, object()),
+        retention_sweep=lambda: None,
     )
 
     assert set(worker.functions) == {
@@ -105,8 +121,17 @@ def test_worker_preserves_existing_uniform_timeout(
         "generate_dataset_artifact_job",
         "prepare_annotation_context_job",
         "annotate_dataset_job",
+        "dispatch_ddm_training_job",
+        "dispatch_vlm_training_job",
         "cron:dispatch_pending_jobs",
+        "cron:run_retention_sweep_cron",
     }
     assert all(function.timeout_s is None for function in worker.functions.values())
+    sweep_cron = next(
+        job for job in worker.cron_jobs if job.name == "cron:run_retention_sweep_cron"
+    )
+    assert sweep_cron.second == set(range(60))
+    assert sweep_cron.job_id is None
+    assert isinstance(worker.ctx["retention_sweep_lock"], asyncio.Lock)
     assert worker.job_timeout_s == 330
     assert worker_module._stale_recovery_timeout_seconds(cast(Any, settings)) == 330

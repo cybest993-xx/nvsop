@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  cancelDdmTrainingCommand,
   confirmVideoUpload,
   createAnnotationContext,
   createTrainingDataset,
   listAnnotations,
+  listDdmTrainingCommands,
   readAnnotation,
   readAnnotationContext,
   readDatasetMembers,
+  readDdmTrainingCommand,
+  readDdmTrainingResult,
   readJob,
   readTrainingDatasets,
   requestVideoUpload,
@@ -251,6 +255,115 @@ describe('training-dataset control-plane calls', () => {
     )
     expect(new URL(requests[5]!.url).pathname).toBe(
       `/api/v1/training-datasets/${DATASET_ID}/members/${MEMBER_ID}/annotations/submission-1/retry`,
+    )
+  })
+
+  it('reads persistent DDM commands and registered results through the generated endpoints', async () => {
+    const command = {
+      id: 'command-1',
+      dataset_id: DATASET_ID,
+      status: 'bound',
+      request_digest: 'e'.repeat(64),
+      base_job_id: 'base-job-1',
+      base_status: 'running',
+      base_progress: 10,
+      base_current_step: 1,
+      base_total_steps: 10,
+      last_observed_at: '2026-09-08T01:00:00Z',
+      observation_failure_code: null,
+      observation_failure_detail: null,
+      failure_code: null,
+      failure_detail: null,
+      result_status: 'not_registered',
+      result_generation: 0,
+      result_config_sha256: null,
+      result_config_size: null,
+      result_checkpoint_sha256: null,
+      result_checkpoint_size: null,
+      result_failure_code: null,
+      result_failure_detail: null,
+      result_registered_at: null,
+      created_by: 'user-1',
+      created_at: '2026-09-08T01:00:00Z',
+      updated_at: '2026-09-08T01:00:00Z',
+    }
+    const page = { items: [command], page: 1, page_size: 50, total: 1 }
+    const fetch = stubFetch(page)
+
+    await expect(listDdmTrainingCommands(DATASET_ID)).resolves.toEqual(page)
+    fetch.mockResolvedValueOnce(respond(200, command))
+    await expect(readDdmTrainingCommand(DATASET_ID, 'command-1')).resolves.toEqual(command)
+    fetch.mockResolvedValueOnce(
+      respond(200, {
+        command_id: 'command-1',
+        dataset_id: DATASET_ID,
+        status: 'not_registered',
+        config: null,
+        checkpoint: null,
+        failure_code: null,
+        failure_detail: null,
+        registered_at: null,
+        access: null,
+      }),
+    )
+    await expect(readDdmTrainingResult(DATASET_ID, 'command-1')).resolves.toMatchObject({
+      status: 'not_registered',
+      access: null,
+    })
+
+    const requests = fetch.mock.calls.map(([request]) => request)
+    expect(new URL(requests[0]!.url).pathname).toBe(
+      `/api/v1/training-datasets/${DATASET_ID}/ddm-training-commands`,
+    )
+    expect(new URL(requests[0]!.url).searchParams.get('page_size')).toBe('50')
+    expect(requests[0]!.cache).toBe('no-store')
+    expect(new URL(requests[1]!.url).pathname).toBe(
+      `/api/v1/training-datasets/${DATASET_ID}/ddm-training-commands/command-1`,
+    )
+    expect(new URL(requests[2]!.url).pathname).toBe(
+      `/api/v1/training-datasets/${DATASET_ID}/ddm-training-commands/command-1/result`,
+    )
+  })
+
+  it('cancels a pending DDM training command over POST', async () => {
+    const cancelled = {
+      id: 'command-1',
+      dataset_id: DATASET_ID,
+      status: 'cancelled',
+      request_digest: 'e'.repeat(64),
+      base_job_id: null,
+      base_status: null,
+      base_progress: null,
+      base_current_step: null,
+      base_total_steps: null,
+      last_observed_at: null,
+      observation_failure_code: null,
+      observation_failure_detail: null,
+      failure_code: null,
+      failure_detail: null,
+      result_status: 'not_registered',
+      result_generation: 0,
+      result_config_sha256: null,
+      result_config_size: null,
+      result_checkpoint_sha256: null,
+      result_checkpoint_size: null,
+      result_failure_code: null,
+      result_failure_detail: null,
+      result_registered_at: null,
+      cancelled_by: 'user-1',
+      cancelled_at: '2026-09-08T01:05:00Z',
+      created_by: 'user-1',
+      created_at: '2026-09-08T01:00:00Z',
+      updated_at: '2026-09-08T01:05:00Z',
+    }
+    const fetch = stubFetch(cancelled)
+
+    await expect(cancelDdmTrainingCommand(DATASET_ID, 'command-1')).resolves.toEqual(cancelled)
+    const requests = fetch.mock.calls.map(([request]) => request)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.method).toBe('POST')
+    expect(new URL(requests[0]!.url).pathname).toBe(
+      `/api/v1/training-datasets/${DATASET_ID}/ddm-training-commands/command-1/cancel`,
     )
   })
 })

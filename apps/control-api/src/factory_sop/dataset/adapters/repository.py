@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
@@ -17,8 +17,10 @@ from factory_sop.dataset.adapters.tables import (
     AnnotationContextRow,
     AnnotationExecutionRow,
     AnnotationSubmissionRow,
+    AugmentationCommandRow,
     DatasetArtifactRow,
     DatasetMemberRow,
+    TrainingCommandRow,
     TrainingDatasetRow,
     UploadAttemptRow,
     UsageCheckRow,
@@ -29,9 +31,15 @@ from factory_sop.dataset.model import (
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
+    AugmentationCommand,
+    AugmentationStatus,
     DatasetArtifact,
     DatasetMember,
+    TrainingCommand,
+    TrainingCommandStatus,
     TrainingDataset,
+    TrainingResultStatus,
+    TrainingService,
     UploadAttempt,
     UsageCheck,
     UsageKind,
@@ -535,6 +543,585 @@ class PostgresDatasetRepository:
                     recovery_action=value.recovery_action,
                     job_id=value.job_id,
                     updated_at=value.updated_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def add_augmentation(self, value: AugmentationCommand) -> bool:
+        try:
+            with self._session.begin_nested():
+                self._session.add(AugmentationCommandRow.from_domain(value))
+                self._session.flush()
+        except IntegrityError:
+            if self.augmentation_by_key(value.dataset_id, value.idempotency_key) is None:
+                raise
+            return False
+        return True
+
+    def augmentation_by_key(self, dataset_id: UUID, key: str) -> AugmentationCommand | None:
+        row = self._session.scalar(
+            select(AugmentationCommandRow).where(
+                AugmentationCommandRow.dataset_id == dataset_id,
+                AugmentationCommandRow.idempotency_key == key,
+            )
+        )
+        return None if row is None else row.to_domain()
+
+    def augmentation_by_id(self, command_id: UUID) -> AugmentationCommand | None:
+        row = self._session.get(AugmentationCommandRow, command_id, populate_existing=True)
+        return None if row is None else row.to_domain()
+
+    def list_augmentations(self, dataset_id: UUID) -> Sequence[AugmentationCommand]:
+        rows = self._session.scalars(
+            select(AugmentationCommandRow)
+            .where(AugmentationCommandRow.dataset_id == dataset_id)
+            .order_by(AugmentationCommandRow.created_at, AugmentationCommandRow.id)
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def save_augmentation(self, value: AugmentationCommand, *, expected_version: int) -> bool:
+        """只更新可变事实；首次输入、派发目标与意图时刻不在此写入。"""
+        result = self._session.execute(
+            update(AugmentationCommandRow)
+            .where(
+                AugmentationCommandRow.id == value.id,
+                AugmentationCommandRow.version == expected_version,
+                or_(
+                    AugmentationCommandRow.base_augmentation_id.is_(None),
+                    AugmentationCommandRow.base_augmentation_id == value.base_augmentation_id,
+                ),
+            )
+            .values(
+                status=value.status.value,
+                job_id=value.job_id,
+                version=value.version,
+                base_augmentation_id=value.base_augmentation_id,
+                base_observation=dict(value.base_observation),
+                last_observed_at=value.last_observed_at,
+                failure_code=value.failure_code,
+                result_status=value.result_status,
+                result_manifest=dict(value.result_manifest),
+                result_failure_code=value.result_failure_code,
+                updated_at=value.updated_at,
+            )
+        )
+        return cast("CursorResult[Any]", result).rowcount == 1
+
+    def begin_augmentation_dispatch(
+        self,
+        *,
+        command_id: UUID,
+        backend_target: str,
+        now: datetime,
+        input_files: list[dict[str, Any]],
+    ) -> AugmentationCommand | None:
+        """PG 部分唯一索引持久占用 target/label；过期租约和进程死亡不释放。"""
+        try:
+            with self._session.begin_nested():
+                result = self._session.execute(
+                    update(AugmentationCommandRow)
+                    .where(
+                        AugmentationCommandRow.id == command_id,
+                        AugmentationCommandRow.status == AugmentationStatus.PENDING.value,
+                    )
+                    .values(
+                        status=AugmentationStatus.RESULT_UNKNOWN.value,
+                        backend_target=backend_target,
+                        dispatched_at=now,
+                        updated_at=now,
+                        version=AugmentationCommandRow.version + 1,
+                        failure_code="DISPATCH_RESULT_UNVERIFIED",
+                        result_manifest={"input_files": input_files},
+                    )
+                )
+        except IntegrityError:
+            return None
+        return (
+            self.augmentation_by_id(command_id)
+            if cast("CursorResult[Any]", result).rowcount
+            else None
+        )
+
+    def cancel_pending_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> None:
+        self._session.execute(
+            update(AugmentationCommandRow)
+            .where(
+                AugmentationCommandRow.id == command_id,
+                AugmentationCommandRow.dataset_id == dataset_id,
+                AugmentationCommandRow.status == AugmentationStatus.PENDING.value,
+            )
+            .values(
+                status=AugmentationStatus.CANCELLED.value,
+                cancelled_by=actor_id,
+                cancelled_at=now,
+                updated_at=now,
+                version=AugmentationCommandRow.version + 1,
+            )
+        )
+
+    def add_training_command(self, value: TrainingCommand) -> bool:
+        """按数据集与服务范围的幂等键追加训练命令；并发占用同一键时不覆盖已存在命令。"""
+        statement = (
+            postgres_insert(TrainingCommandRow)
+            .values(
+                id=value.id,
+                dataset_id=value.dataset_id,
+                service=value.service.value,
+                status=value.status.value,
+                idempotency_key=value.idempotency_key,
+                request_digest=value.request_digest,
+                payload=dict(value.payload),
+                job_id=value.job_id,
+                created_by=value.created_by,
+                created_at=value.created_at,
+                updated_at=value.updated_at,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    TrainingCommandRow.dataset_id,
+                    TrainingCommandRow.service,
+                    TrainingCommandRow.idempotency_key,
+                ]
+            )
+            .returning(TrainingCommandRow.id)
+        )
+        return self._session.execute(statement).scalar_one_or_none() is not None
+
+    def training_command_by_idempotency(
+        self, *, service: TrainingService, dataset_id: UUID, idempotency_key: str
+    ) -> TrainingCommand | None:
+        row = self._session.scalar(
+            select(TrainingCommandRow).where(
+                TrainingCommandRow.dataset_id == dataset_id,
+                TrainingCommandRow.service == service.value,
+                TrainingCommandRow.idempotency_key == idempotency_key,
+            )
+        )
+        return row.to_domain() if row is not None else None
+
+    def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
+        row = self._session.get(TrainingCommandRow, command_id, populate_existing=True)
+        return row.to_domain() if row is not None else None
+
+    def list_training_commands(
+        self, *, service: TrainingService, dataset_id: UUID
+    ) -> Sequence[TrainingCommand]:
+        """按创建时间读取归该服务的全部训练命令，供重新打开页面后恢复。"""
+        rows = self._session.scalars(
+            select(TrainingCommandRow)
+            .where(
+                TrainingCommandRow.dataset_id == dataset_id,
+                TrainingCommandRow.service == service.value,
+            )
+            .order_by(TrainingCommandRow.created_at.asc(), TrainingCommandRow.id.asc())
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def save_training_command(
+        self, value: TrainingCommand, *, expected_updated_at: datetime
+    ) -> bool:
+        """只在受理租约仍匹配时绑定 job 身份，不改写取消或派发状态。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TrainingCommandRow)
+                .where(
+                    TrainingCommandRow.id == value.id,
+                    TrainingCommandRow.updated_at == expected_updated_at,
+                )
+                .values(
+                    job_id=value.job_id,
+                    updated_at=value.updated_at,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def cancel_pending_training_command(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        """同一行的状态条件更新裁决取消与派发；等待竞争事务后 PostgreSQL 会重查条件。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TrainingCommandRow)
+                .where(
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.dataset_id == dataset_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.PENDING.value,
+                )
+                .values(
+                    status=TrainingCommandStatus.CANCELLED.value,
+                    cancelled_by=actor_id,
+                    cancelled_at=now,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def request_training_cancellation(
+        self, *, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        """派发意图后只记录首次取消请求；状态与在途保护保持，等待服务 adapter 的停止核实。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TrainingCommandRow)
+                .where(
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status.in_(
+                        (
+                            TrainingCommandStatus.RESULT_UNKNOWN.value,
+                            TrainingCommandStatus.BOUND.value,
+                        )
+                    ),
+                    TrainingCommandRow.cancel_requested_at.is_(None),
+                )
+                .values(
+                    cancel_requested_by=actor_id,
+                    cancel_requested_at=now,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def record_training_cancellation(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        response: dict[str, Any],
+        detail: str,
+        now: datetime,
+    ) -> None:
+        """保存基座原取消响应与核实结论；命令仍在途，绝不在此释放保护。"""
+        self._session.execute(
+            update(TrainingCommandRow)
+            .where(
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                TrainingCommandRow.base_job_id == base_job_id,
+                TrainingCommandRow.cancel_requested_at.is_not(None),
+            )
+            .values(
+                cancel_response=dict(response),
+                cancel_detail=detail[:512],
+                updated_at=now,
+            )
+        )
+
+    def confirm_training_cancellation(
+        self, *, command_id: UUID, base_job_id: str, response: Mapping[str, object], now: datetime
+    ) -> bool:
+        """停止核实成功后，在同一事务中取消命令、记录响应并释放在途约束。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TrainingCommandRow)
+                .where(
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
+                    TrainingCommandRow.cancel_requested_at.is_not(None),
+                    TrainingCommandRow.service == TrainingService.DDM.value,
+                )
+                .values(
+                    status=TrainingCommandStatus.CANCELLED.value,
+                    cancelled_by=TrainingCommandRow.cancel_requested_by,
+                    cancelled_at=now,
+                    cancel_response=dict(response),
+                    cancel_detail=None,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def begin_training_dispatch(
+        self,
+        *,
+        command_id: UUID,
+        backend_target: str,
+        baseline_job_ids: Sequence[str],
+        dispatch_facts: dict[str, Any],
+        now: datetime,
+    ) -> TrainingCommand | None:
+        """完整意图一次冻结；唯一状态转换获胜者才可发送，时间戳不作执行权。"""
+        try:
+            with self._session.begin_nested():
+                result = cast(
+                    "CursorResult[Any]",
+                    self._session.execute(
+                        update(TrainingCommandRow)
+                        .where(
+                            TrainingCommandRow.id == command_id,
+                            TrainingCommandRow.status == TrainingCommandStatus.PENDING.value,
+                        )
+                        .values(
+                            status=TrainingCommandStatus.RESULT_UNKNOWN.value,
+                            backend_target=backend_target,
+                            baseline_job_ids=list(baseline_job_ids),
+                            dispatch_facts=dispatch_facts,
+                            updated_at=now,
+                            failure_code="DISPATCH_RESULT_UNVERIFIED",
+                            failure_detail="启动意图已持久化，尚未确认基座任务身份；不得重发 start",
+                        )
+                    ),
+                )
+        except IntegrityError:
+            return None
+        return self.training_command_by_id(command_id) if result.rowcount == 1 else None
+
+    def bind_training_base_job(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        now: datetime,
+    ) -> None:
+        """未知结果只能绑定一次；迟到 worker 不得替换获胜身份。"""
+        self._session.execute(
+            update(TrainingCommandRow)
+            .where(
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.RESULT_UNKNOWN.value,
+                TrainingCommandRow.base_job_id.is_(None),
+            )
+            .values(
+                status=TrainingCommandStatus.BOUND.value,
+                base_job_id=base_job_id,
+                failure_code=None,
+                failure_detail=None,
+                updated_at=now,
+            )
+        )
+
+    def record_training_failure(
+        self,
+        *,
+        command_id: UUID,
+        expected_status: TrainingCommandStatus,
+        failure_code: str,
+        failure_detail: str,
+        now: datetime,
+    ) -> None:
+        """只有意图前的 pending 可失败；未知结果仅更新诊断，绝不释放保护。"""
+        if expected_status not in {
+            TrainingCommandStatus.PENDING,
+            TrainingCommandStatus.RESULT_UNKNOWN,
+        }:
+            raise ValueError("不能覆盖已绑定的派发事实")
+        self._session.execute(
+            update(TrainingCommandRow)
+            .where(
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == expected_status.value,
+            )
+            .values(
+                status=(
+                    TrainingCommandStatus.FAILED.value
+                    if expected_status is TrainingCommandStatus.PENDING
+                    else expected_status.value
+                ),
+                failure_code=failure_code,
+                failure_detail=failure_detail,
+                updated_at=now,
+            )
+        )
+
+    def observe_training_base_job(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        observation: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        """窄状态观察不发布结果；成功观察单独记录时刻并清除旧查询失败诊断。"""
+        self._session.execute(
+            update(TrainingCommandRow)
+            .where(
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                TrainingCommandRow.base_job_id == base_job_id,
+                or_(
+                    TrainingCommandRow.observation_attempted_at.is_(None),
+                    TrainingCommandRow.observation_attempted_at <= now,
+                ),
+            )
+            .values(
+                base_observation=observation,
+                observation_attempted_at=now,
+                last_observed_at=now,
+                observation_failure_code=None,
+                observation_failure_detail=None,
+                updated_at=now,
+            )
+        )
+
+    def record_training_observation_failure(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        failure_code: str,
+        failure_detail: str,
+        now: datetime,
+    ) -> None:
+        """记录查询失败诊断；绝不改写基座原状态或最后成功观测时刻，也不释放保护。"""
+        self._session.execute(
+            update(TrainingCommandRow)
+            .where(
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                TrainingCommandRow.base_job_id == base_job_id,
+                or_(
+                    TrainingCommandRow.observation_attempted_at.is_(None),
+                    TrainingCommandRow.observation_attempted_at <= now,
+                ),
+            )
+            .values(
+                observation_failure_code=failure_code,
+                observation_failure_detail=failure_detail,
+                observation_attempted_at=now,
+                updated_at=now,
+            )
+        )
+
+    def register_training_result(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        config_object_key: str,
+        config_sha256: str,
+        config_size: int,
+        checkpoint_object_key: str,
+        checkpoint_sha256: str,
+        checkpoint_size: int,
+        now: datetime,
+    ) -> bool:
+        """首次登记获胜：同一命令的迟到/重复登记不覆盖已发布结果。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TrainingCommandRow)
+                .where(
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
+                    TrainingCommandRow.result_status == TrainingResultStatus.NOT_REGISTERED.value,
+                    or_(
+                        TrainingCommandRow.observation_attempted_at.is_(None),
+                        TrainingCommandRow.observation_attempted_at <= now,
+                    ),
+                )
+                .values(
+                    result_status=TrainingResultStatus.REGISTERED.value,
+                    result_generation=TrainingCommandRow.result_generation + 1,
+                    result_config_object_key=config_object_key,
+                    result_config_sha256=config_sha256,
+                    result_config_size=config_size,
+                    result_checkpoint_object_key=checkpoint_object_key,
+                    result_checkpoint_sha256=checkpoint_sha256,
+                    result_checkpoint_size=checkpoint_size,
+                    result_failure_code=None,
+                    result_failure_detail=None,
+                    result_registered_at=now,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def record_training_result_failure(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        failure_code: str,
+        failure_detail: str,
+        now: datetime,
+    ) -> None:
+        """结果不可读/登记失败按可恢复诊断记录，绝不释放保护或重发训练。"""
+        self._session.execute(
+            update(TrainingCommandRow)
+            .where(
+                TrainingCommandRow.id == command_id,
+                TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                TrainingCommandRow.base_job_id == base_job_id,
+                TrainingCommandRow.result_status == TrainingResultStatus.NOT_REGISTERED.value,
+                or_(
+                    TrainingCommandRow.observation_attempted_at.is_(None),
+                    TrainingCommandRow.observation_attempted_at <= now,
+                ),
+            )
+            .values(
+                result_failure_code=failure_code,
+                result_failure_detail=failure_detail,
+                updated_at=now,
+            )
+        )
+
+    def complete_training_command(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        now: datetime,
+    ) -> bool:
+        """基座成功且结果已登记才进入发布终态，安全释放后端在途保护。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TrainingCommandRow)
+                .where(
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
+                    TrainingCommandRow.result_status == TrainingResultStatus.REGISTERED.value,
+                )
+                .values(
+                    status=TrainingCommandStatus.COMPLETED.value,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
+
+    def fail_training_command(
+        self,
+        *,
+        command_id: UUID,
+        base_job_id: str,
+        failure_code: str,
+        failure_detail: str,
+        now: datetime,
+    ) -> bool:
+        """基座明确失败才进入失败终态；raw cancelled 不构成停止证明。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TrainingCommandRow)
+                .where(
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
+                    or_(
+                        TrainingCommandRow.observation_attempted_at.is_(None),
+                        TrainingCommandRow.observation_attempted_at <= now,
+                    ),
+                )
+                .values(
+                    status=TrainingCommandStatus.FAILED.value,
+                    failure_code=failure_code,
+                    failure_detail=failure_detail,
+                    updated_at=now,
                 )
             ),
         )

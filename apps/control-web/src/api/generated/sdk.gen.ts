@@ -3,24 +3,60 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client'
 import { client } from './client.gen'
 import type {
+  BeginEvidenceReviewData,
+  BeginEvidenceReviewErrors,
+  BeginEvidenceReviewResponses,
   BindTemplateVersionData,
   BindTemplateVersionErrors,
   BindTemplateVersionResponses,
+  CancelDdmTrainingCommandData,
+  CancelDdmTrainingCommandErrors,
+  CancelDdmTrainingCommandResponses,
+  CancelEvidenceReviewData,
+  CancelEvidenceReviewErrors,
+  CancelEvidenceReviewResponses,
+  CancelNormalHandoverData,
+  CancelNormalHandoverErrors,
+  CancelNormalHandoverResponses,
+  CancelPendingDatasetAugmentationData,
+  CancelPendingDatasetAugmentationErrors,
+  CancelPendingDatasetAugmentationResponses,
+  CancelVlmTrainingCommandData,
+  CancelVlmTrainingCommandErrors,
+  CancelVlmTrainingCommandResponses,
   CheckEvidenceAccessData,
   CheckEvidenceAccessErrors,
   CheckEvidenceAccessResponses,
+  CheckRetentionReportedImpactAccessData,
+  CheckRetentionReportedImpactAccessErrors,
+  CheckRetentionReportedImpactAccessResponses,
+  ClaimEvidenceDeletionData,
+  ClaimEvidenceDeletionErrors,
+  ClaimEvidenceDeletionResponses,
   ClaimNextDeviceCommandData,
   ClaimNextDeviceCommandErrors,
   ClaimNextDeviceCommandResponses,
+  ClaimNextExecutionHandoverCommandData,
+  ClaimNextExecutionHandoverCommandErrors,
+  ClaimNextExecutionHandoverCommandResponses,
   ClaimNextReclipCommandData,
   ClaimNextReclipCommandErrors,
   ClaimNextReclipCommandResponses,
+  ClaimRecordingCompressionData,
+  ClaimRecordingCompressionErrors,
+  ClaimRecordingCompressionResponses,
   CompleteDeviceCommandData,
   CompleteDeviceCommandErrors,
   CompleteDeviceCommandResponses,
+  CompleteExecutionHandoverCommandData,
+  CompleteExecutionHandoverCommandErrors,
+  CompleteExecutionHandoverCommandResponses,
   CompleteReclipCommandData,
   CompleteReclipCommandErrors,
   CompleteReclipCommandResponses,
+  CompleteRecordingCompressionData,
+  CompleteRecordingCompressionErrors,
+  CompleteRecordingCompressionResponses,
   ConfirmHandoverData,
   ConfirmHandoverErrors,
   ConfirmHandoverResponses,
@@ -54,6 +90,9 @@ import type {
   CreateInferenceHostData,
   CreateInferenceHostErrors,
   CreateInferenceHostResponses,
+  CreateNormalHandoverData,
+  CreateNormalHandoverErrors,
+  CreateNormalHandoverResponses,
   CreatePointData,
   CreatePointErrors,
   CreatePointResponses,
@@ -135,6 +174,15 @@ import type {
   EnqueueConnectorConnectionTestData,
   EnqueueConnectorConnectionTestErrors,
   EnqueueConnectorConnectionTestResponses,
+  EnqueueRecordingCompressionData,
+  EnqueueRecordingCompressionErrors,
+  EnqueueRecordingCompressionResponses,
+  EstimateRetentionPolicyImpactData,
+  EstimateRetentionPolicyImpactErrors,
+  EstimateRetentionPolicyImpactResponses,
+  EstimateStationRetentionImpactData,
+  EstimateStationRetentionImpactErrors,
+  EstimateStationRetentionImpactResponses,
   ExportInferenceHostMediaConfigurationData,
   ExportInferenceHostMediaConfigurationErrors,
   ExportInferenceHostMediaConfigurationResponses,
@@ -144,6 +192,9 @@ import type {
   GetMonitorStreamHealthData,
   GetMonitorStreamHealthErrors,
   GetMonitorStreamHealthResponses,
+  GrantNormalHandoverData,
+  GrantNormalHandoverErrors,
+  GrantNormalHandoverResponses,
   ImportTemplateDraftData,
   ImportTemplateDraftErrors,
   ImportTemplateDraftResponses,
@@ -165,12 +216,18 @@ import type {
   ListDatasetArtifactsData,
   ListDatasetArtifactsErrors,
   ListDatasetArtifactsResponses,
+  ListDatasetAugmentationsData,
+  ListDatasetAugmentationsErrors,
+  ListDatasetAugmentationsResponses,
   ListDatasetMembersData,
   ListDatasetMembersErrors,
   ListDatasetMembersResponses,
   ListDatasetUsageChecksData,
   ListDatasetUsageChecksErrors,
   ListDatasetUsageChecksResponses,
+  ListDdmTrainingCommandsData,
+  ListDdmTrainingCommandsErrors,
+  ListDdmTrainingCommandsResponses,
   ListInferenceBackendsData,
   ListInferenceBackendsErrors,
   ListInferenceBackendsResponses,
@@ -219,6 +276,9 @@ import type {
   ListVlmCandidatesData,
   ListVlmCandidatesErrors,
   ListVlmCandidatesResponses,
+  ListVlmTrainingCommandsData,
+  ListVlmTrainingCommandsErrors,
+  ListVlmTrainingCommandsResponses,
   OpenSessionData,
   OpenSessionErrors,
   OpenSessionResponses,
@@ -249,12 +309,21 @@ import type {
   ReadDatasetArtifactData,
   ReadDatasetArtifactErrors,
   ReadDatasetArtifactResponses,
+  ReadDatasetAugmentationData,
+  ReadDatasetAugmentationErrors,
+  ReadDatasetAugmentationResponses,
   ReadDatasetMemberData,
   ReadDatasetMemberErrors,
   ReadDatasetMemberResponses,
   ReadDatasetUsageCheckData,
   ReadDatasetUsageCheckErrors,
   ReadDatasetUsageCheckResponses,
+  ReadDdmTrainingCommandData,
+  ReadDdmTrainingCommandErrors,
+  ReadDdmTrainingCommandResponses,
+  ReadDdmTrainingResultData,
+  ReadDdmTrainingResultErrors,
+  ReadDdmTrainingResultResponses,
   ReadDeviceCommandData,
   ReadDeviceCommandErrors,
   ReadDeviceCommandResponses,
@@ -285,18 +354,30 @@ import type {
   ReadLivenessData,
   ReadLivenessErrors,
   ReadLivenessResponses,
+  ReadNormalHandoverData,
+  ReadNormalHandoverErrors,
+  ReadNormalHandoverResponses,
   ReadOverviewData,
   ReadOverviewErrors,
   ReadOverviewResponses,
   ReadPointData,
   ReadPointErrors,
   ReadPointResponses,
+  ReadRecordingCompressionCommandData,
+  ReadRecordingCompressionCommandErrors,
+  ReadRecordingCompressionCommandResponses,
+  ReadRetentionPolicyData,
+  ReadRetentionPolicyErrors,
+  ReadRetentionPolicyResponses,
   ReadSessionData,
   ReadSessionErrors,
   ReadSessionResponses,
   ReadStationData,
   ReadStationErrors,
   ReadStationResponses,
+  ReadStationRetentionData,
+  ReadStationRetentionErrors,
+  ReadStationRetentionResponses,
   ReadStationTemplateConfigurationData,
   ReadStationTemplateConfigurationErrors,
   ReadStationTemplateConfigurationResponses,
@@ -315,6 +396,12 @@ import type {
   ReadVlmCandidateData,
   ReadVlmCandidateErrors,
   ReadVlmCandidateResponses,
+  ReadVlmTrainingCommandData,
+  ReadVlmTrainingCommandErrors,
+  ReadVlmTrainingCommandResponses,
+  ReadVlmTrainingResultData,
+  ReadVlmTrainingResultErrors,
+  ReadVlmTrainingResultResponses,
   RegisterDatasetActionListData,
   RegisterDatasetActionListErrors,
   RegisterDatasetActionListResponses,
@@ -330,6 +417,9 @@ import type {
   RegisterVlmCandidateData,
   RegisterVlmCandidateErrors,
   RegisterVlmCandidateResponses,
+  ReportEvidenceDeletionResultData,
+  ReportEvidenceDeletionResultErrors,
+  ReportEvidenceDeletionResultResponses,
   ReportMonitorDecisionData,
   ReportMonitorDecisionErrors,
   ReportMonitorDecisionResponses,
@@ -357,12 +447,21 @@ import type {
   RequestDatasetArtifactData,
   RequestDatasetArtifactErrors,
   RequestDatasetArtifactResponses,
+  RequestDatasetAugmentationData,
+  RequestDatasetAugmentationErrors,
+  RequestDatasetAugmentationResponses,
   RequestDatasetUsageCheckData,
   RequestDatasetUsageCheckErrors,
   RequestDatasetUsageCheckResponses,
+  RequestDdmTrainingCommandData,
+  RequestDdmTrainingCommandErrors,
+  RequestDdmTrainingCommandResponses,
   RequestVideoUploadData,
   RequestVideoUploadErrors,
   RequestVideoUploadResponses,
+  RequestVlmTrainingCommandData,
+  RequestVlmTrainingCommandErrors,
+  RequestVlmTrainingCommandResponses,
   ResetUserPasswordData,
   ResetUserPasswordErrors,
   ResetUserPasswordResponses,
@@ -411,6 +510,12 @@ import type {
   UpdateConnectorCapabilityData,
   UpdateConnectorCapabilityErrors,
   UpdateConnectorCapabilityResponses,
+  UpdateRetentionPolicyData,
+  UpdateRetentionPolicyErrors,
+  UpdateRetentionPolicyResponses,
+  UpdateStationRetentionData,
+  UpdateStationRetentionErrors,
+  UpdateStationRetentionResponses,
   UpdateStationRuntimeParametersData,
   UpdateStationRuntimeParametersErrors,
   UpdateStationRuntimeParametersResponses,
@@ -423,6 +528,9 @@ import type {
   ValidateTemplateBindingData,
   ValidateTemplateBindingErrors,
   ValidateTemplateBindingResponses,
+  VerifyEvidenceDeletionData,
+  VerifyEvidenceDeletionErrors,
+  VerifyEvidenceDeletionResponses,
 } from './types.gen'
 
 export type Options<
@@ -944,6 +1052,63 @@ export const setConnectorStatus = <ThrowOnError extends boolean = false>(
   })
 
 /**
+ * Claim
+ */
+export const claimRecordingCompression = <ThrowOnError extends boolean = false>(
+  options: Options<ClaimRecordingCompressionData, ThrowOnError>,
+): RequestResult<
+  ClaimRecordingCompressionResponses,
+  ClaimRecordingCompressionErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ClaimRecordingCompressionResponses,
+    ClaimRecordingCompressionErrors,
+    ThrowOnError
+  >({ url: '/api/v1/device-commands/compression/next', ...options })
+
+/**
+ * Complete
+ */
+export const completeRecordingCompression = <ThrowOnError extends boolean = false>(
+  options: Options<CompleteRecordingCompressionData, ThrowOnError>,
+): RequestResult<
+  CompleteRecordingCompressionResponses,
+  CompleteRecordingCompressionErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CompleteRecordingCompressionResponses,
+    CompleteRecordingCompressionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/device-commands/compression/{command_id}/result',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Claim Next Execution Handover
+ *
+ * 只允许旧机按明确 command type 领取正常交权停机命令。
+ */
+export const claimNextExecutionHandoverCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ClaimNextExecutionHandoverCommandData, ThrowOnError>,
+): RequestResult<
+  ClaimNextExecutionHandoverCommandResponses,
+  ClaimNextExecutionHandoverCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ClaimNextExecutionHandoverCommandResponses,
+    ClaimNextExecutionHandoverCommandErrors,
+    ThrowOnError
+  >({ url: '/api/v1/device-commands/execution-handover/next', ...options })
+
+/**
  * Claim Next Device Command
  *
  * 按已验证的主机身份领取一条命令；无命令返回 204。
@@ -982,6 +1147,31 @@ export const readDeviceCommand = <ThrowOnError extends boolean = false>(
   (options.client ?? client).get<ReadDeviceCommandResponses, ReadDeviceCommandErrors, ThrowOnError>(
     { url: '/api/v1/device-commands/{command_id}', ...options },
   )
+
+/**
+ * Complete Execution Handover
+ *
+ * 认证旧机回报，在同一事务内更新请求与命令终态。
+ */
+export const completeExecutionHandoverCommand = <ThrowOnError extends boolean = false>(
+  options: Options<CompleteExecutionHandoverCommandData, ThrowOnError>,
+): RequestResult<
+  CompleteExecutionHandoverCommandResponses,
+  CompleteExecutionHandoverCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CompleteExecutionHandoverCommandResponses,
+    CompleteExecutionHandoverCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/device-commands/{command_id}/execution-handover-result',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
 
 /**
  * Complete Reclip Command
@@ -1138,6 +1328,48 @@ export const createEvidenceReclipRequest = <ThrowOnError extends boolean = false
   })
 
 /**
+ * Begin Review Hold
+ *
+ * 进入在审保护：登记本人在该证据上的持久复核占用，删除认领在此之后被拒。
+ */
+export const beginEvidenceReview = <ThrowOnError extends boolean = false>(
+  options: Options<BeginEvidenceReviewData, ThrowOnError>,
+): RequestResult<BeginEvidenceReviewResponses, BeginEvidenceReviewErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    BeginEvidenceReviewResponses,
+    BeginEvidenceReviewErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/evidence/{evidence_id}/review-holds',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Cancel Review Hold
+ *
+ * 退出在审保护：只结束当前人自己的占用，其他人或已结案的占用不受影响。
+ */
+export const cancelEvidenceReview = <ThrowOnError extends boolean = false>(
+  options: Options<CancelEvidenceReviewData, ThrowOnError>,
+): RequestResult<CancelEvidenceReviewResponses, CancelEvidenceReviewErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CancelEvidenceReviewResponses,
+    CancelEvidenceReviewErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/evidence/{evidence_id}/review-holds/cancel',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
  * Read Reviews
  */
 export const readEvidenceReviews = <ThrowOnError extends boolean = false>(
@@ -1229,6 +1461,67 @@ export const confirmHandover = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   })
+
+/**
+ * Create Normal
+ *
+ * 建立正常交权请求；中心收到请求不等于旧机已经停写。
+ */
+export const createNormalHandover = <ThrowOnError extends boolean = false>(
+  options: Options<CreateNormalHandoverData, ThrowOnError>,
+): RequestResult<CreateNormalHandoverResponses, CreateNormalHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CreateNormalHandoverResponses,
+    CreateNormalHandoverErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/execution/normal-handovers',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Normal
+ *
+ * 读取并在需要时持久记录超时状态。
+ */
+export const readNormalHandover = <ThrowOnError extends boolean = false>(
+  options: Options<ReadNormalHandoverData, ThrowOnError>,
+): RequestResult<ReadNormalHandoverResponses, ReadNormalHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadNormalHandoverResponses,
+    ReadNormalHandoverErrors,
+    ThrowOnError
+  >({ url: '/api/v1/execution/normal-handovers/{handover_id}', ...options })
+
+/**
+ * Cancel Normal
+ */
+export const cancelNormalHandover = <ThrowOnError extends boolean = false>(
+  options: Options<CancelNormalHandoverData, ThrowOnError>,
+): RequestResult<CancelNormalHandoverResponses, CancelNormalHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CancelNormalHandoverResponses,
+    CancelNormalHandoverErrors,
+    ThrowOnError
+  >({ url: '/api/v1/execution/normal-handovers/{handover_id}/cancellation', ...options })
+
+/**
+ * Grant Normal
+ *
+ * 仅消费当前已确认停写请求；重复提交返回已冻结的新权身份。
+ */
+export const grantNormalHandover = <ThrowOnError extends boolean = false>(
+  options: Options<GrantNormalHandoverData, ThrowOnError>,
+): RequestResult<GrantNormalHandoverResponses, GrantNormalHandoverErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    GrantNormalHandoverResponses,
+    GrantNormalHandoverErrors,
+    ThrowOnError
+  >({ url: '/api/v1/execution/normal-handovers/{handover_id}/grant', ...options })
 
 /**
  * List The Backends
@@ -1544,6 +1837,48 @@ export const exportInferenceHostMediaConfiguration = <ThrowOnError extends boole
     ExportInferenceHostMediaConfigurationErrors,
     ThrowOnError
   >({ url: '/api/v1/inference-hosts/{host_id}/media-configuration', ...options })
+
+/**
+ * Enqueue
+ */
+export const enqueueRecordingCompression = <ThrowOnError extends boolean = false>(
+  options: Options<EnqueueRecordingCompressionData, ThrowOnError>,
+): RequestResult<
+  EnqueueRecordingCompressionResponses,
+  EnqueueRecordingCompressionErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    EnqueueRecordingCompressionResponses,
+    EnqueueRecordingCompressionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts/{host_id}/recording-compression/commands',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Command
+ */
+export const readRecordingCompressionCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ReadRecordingCompressionCommandData, ThrowOnError>,
+): RequestResult<
+  ReadRecordingCompressionCommandResponses,
+  ReadRecordingCompressionCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ReadRecordingCompressionCommandResponses,
+    ReadRecordingCompressionCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts/{host_id}/recording-compression/commands/{command_id}',
+    ...options,
+  })
 
 /**
  * Set The Host Status
@@ -1930,6 +2265,222 @@ export const setPointStatus = <ThrowOnError extends boolean = false>(
 ): RequestResult<SetPointStatusResponses, SetPointStatusErrors, ThrowOnError> =>
   (options.client ?? client).put<SetPointStatusResponses, SetPointStatusErrors, ThrowOnError>({
     url: '/api/v1/points/{point_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Claim Deletion Eligibility
+ *
+ * 为一批候选引用判定删除资格；``eligible`` 的条目附带短期票据。
+ */
+export const claimEvidenceDeletion = <ThrowOnError extends boolean = false>(
+  options: Options<ClaimEvidenceDeletionData, ThrowOnError>,
+): RequestResult<ClaimEvidenceDeletionResponses, ClaimEvidenceDeletionErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    ClaimEvidenceDeletionResponses,
+    ClaimEvidenceDeletionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/evidence-deletion-claims',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Report Deletion Result
+ *
+ * 把来源机的终局反馈结案为认领状态；重复同一反馈按同一状态幂等返回。
+ */
+export const reportEvidenceDeletionResult = <ThrowOnError extends boolean = false>(
+  options: Options<ReportEvidenceDeletionResultData, ThrowOnError>,
+): RequestResult<
+  ReportEvidenceDeletionResultResponses,
+  ReportEvidenceDeletionResultErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    ReportEvidenceDeletionResultResponses,
+    ReportEvidenceDeletionResultErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/evidence-deletion-claims/result',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Verify Deletion Eligibility
+ *
+ * 删除前用票据重新校验同一条引用；只有仍为当前事实的认领才继续放行。
+ */
+export const verifyEvidenceDeletion = <ThrowOnError extends boolean = false>(
+  options: Options<VerifyEvidenceDeletionData, ThrowOnError>,
+): RequestResult<VerifyEvidenceDeletionResponses, VerifyEvidenceDeletionErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    VerifyEvidenceDeletionResponses,
+    VerifyEvidenceDeletionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/evidence-deletion-claims/verify',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read The Retention Policy
+ *
+ * 读取全局默认保留策略；尚未持久化时是代码默认值，不写库。
+ */
+export const readRetentionPolicy = <ThrowOnError extends boolean = false>(
+  options?: Options<ReadRetentionPolicyData, ThrowOnError>,
+): RequestResult<ReadRetentionPolicyResponses, ReadRetentionPolicyErrors, ThrowOnError> =>
+  (options?.client ?? client).get<
+    ReadRetentionPolicyResponses,
+    ReadRetentionPolicyErrors,
+    ThrowOnError
+  >({ url: '/api/v1/retention/policy', ...options })
+
+/**
+ * Update The Retention Policy
+ *
+ * 整组替换全局默认策略；只改变后续回收依据，不同步删除任何数据。
+ *
+ * 必须携带来自影响估算的确认令牌；不完整、基准/目标/计数变化都会使令牌无效或禁止确认。
+ */
+export const updateRetentionPolicy = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateRetentionPolicyData, ThrowOnError>,
+): RequestResult<UpdateRetentionPolicyResponses, UpdateRetentionPolicyErrors, ThrowOnError> =>
+  (options.client ?? client).put<
+    UpdateRetentionPolicyResponses,
+    UpdateRetentionPolicyErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/policy',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Estimate Retention Policy Impact
+ *
+ * 逐字段按数据拥有者的真实事实估算新暴露的对象/空间/时刻；只读，不写策略。
+ *
+ * 全局变更只影响整组跟随全局的工位：带自定义整组的工位不在本次影响范围内。
+ */
+export const estimateRetentionPolicyImpact = <ThrowOnError extends boolean = false>(
+  options: Options<EstimateRetentionPolicyImpactData, ThrowOnError>,
+): RequestResult<
+  EstimateRetentionPolicyImpactResponses,
+  EstimateRetentionPolicyImpactErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    EstimateRetentionPolicyImpactResponses,
+    EstimateRetentionPolicyImpactErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/policy/impact-estimate',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Check Impact Access
+ */
+export const checkRetentionReportedImpactAccess = <ThrowOnError extends boolean = false>(
+  options: Options<CheckRetentionReportedImpactAccessData, ThrowOnError>,
+): RequestResult<
+  CheckRetentionReportedImpactAccessResponses,
+  CheckRetentionReportedImpactAccessErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CheckRetentionReportedImpactAccessResponses,
+    CheckRetentionReportedImpactAccessErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/reported-impact/access-check',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Station Retention Policy
+ *
+ * 读取全局默认、工位覆盖与唯一生效组；只读，不写入。
+ */
+export const readStationRetention = <ThrowOnError extends boolean = false>(
+  options: Options<ReadStationRetentionData, ThrowOnError>,
+): RequestResult<ReadStationRetentionResponses, ReadStationRetentionErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadStationRetentionResponses,
+    ReadStationRetentionErrors,
+    ThrowOnError
+  >({ url: '/api/v1/retention/stations/{station_id}', ...options })
+
+/**
+ * Update Station Retention Policy
+ *
+ * 整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本，0 表示首次建立。
+ *
+ * 必须先做本工位影响估算并带回确认令牌；不完整、基准/目标/计数变化都会使令牌无效或禁止确认。
+ */
+export const updateStationRetention = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateStationRetentionData, ThrowOnError>,
+): RequestResult<UpdateStationRetentionResponses, UpdateStationRetentionErrors, ThrowOnError> =>
+  (options.client ?? client).put<
+    UpdateStationRetentionResponses,
+    UpdateStationRetentionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/stations/{station_id}',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Estimate Station Retention Impact
+ *
+ * 逐字段估算替换该工位覆盖后新暴露的本工位对象/空间/时刻；只读，不写记录。
+ */
+export const estimateStationRetentionImpact = <ThrowOnError extends boolean = false>(
+  options: Options<EstimateStationRetentionImpactData, ThrowOnError>,
+): RequestResult<
+  EstimateStationRetentionImpactResponses,
+  EstimateStationRetentionImpactErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    EstimateStationRetentionImpactResponses,
+    EstimateStationRetentionImpactErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/retention/stations/{station_id}/impact-estimate',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -2422,6 +2973,163 @@ export const downloadDatasetArtifact = <ThrowOnError extends boolean = false>(
   >({ url: '/api/v1/training-datasets/{dataset_id}/artifacts/{artifact_id}/download', ...options })
 
 /**
+ * List Dataset Augmentations
+ */
+export const listDatasetAugmentations = <ThrowOnError extends boolean = false>(
+  options: Options<ListDatasetAugmentationsData, ThrowOnError>,
+): RequestResult<ListDatasetAugmentationsResponses, ListDatasetAugmentationsErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListDatasetAugmentationsResponses,
+    ListDatasetAugmentationsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands', ...options })
+
+/**
+ * Request Dataset Augmentation
+ */
+export const requestDatasetAugmentation = <ThrowOnError extends boolean = false>(
+  options: Options<RequestDatasetAugmentationData, ThrowOnError>,
+): RequestResult<
+  RequestDatasetAugmentationResponses,
+  RequestDatasetAugmentationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RequestDatasetAugmentationResponses,
+    RequestDatasetAugmentationErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Dataset Augmentation
+ */
+export const readDatasetAugmentation = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDatasetAugmentationData, ThrowOnError>,
+): RequestResult<ReadDatasetAugmentationResponses, ReadDatasetAugmentationErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDatasetAugmentationResponses,
+    ReadDatasetAugmentationErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}',
+    ...options,
+  })
+
+/**
+ * Cancel Pending Dataset Augmentation
+ */
+export const cancelPendingDatasetAugmentation = <ThrowOnError extends boolean = false>(
+  options: Options<CancelPendingDatasetAugmentationData, ThrowOnError>,
+): RequestResult<
+  CancelPendingDatasetAugmentationResponses,
+  CancelPendingDatasetAugmentationErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CancelPendingDatasetAugmentationResponses,
+    CancelPendingDatasetAugmentationErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}/cancel',
+    ...options,
+  })
+
+/**
+ * List The Ddm Training Commands
+ *
+ * 重新打开页面后按数据集恢复原命令，不依赖页面内缓存。
+ */
+export const listDdmTrainingCommands = <ThrowOnError extends boolean = false>(
+  options: Options<ListDdmTrainingCommandsData, ThrowOnError>,
+): RequestResult<ListDdmTrainingCommandsResponses, ListDdmTrainingCommandsErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListDdmTrainingCommandsResponses,
+    ListDdmTrainingCommandsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands', ...options })
+
+/**
+ * Request A Ddm Training Command
+ *
+ * 受理一条 DDM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。
+ */
+export const requestDdmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<RequestDdmTrainingCommandData, ThrowOnError>,
+): RequestResult<
+  RequestDdmTrainingCommandResponses,
+  RequestDdmTrainingCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RequestDdmTrainingCommandResponses,
+    RequestDdmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Ddm Training Command
+ */
+export const readDdmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDdmTrainingCommandData, ThrowOnError>,
+): RequestResult<ReadDdmTrainingCommandResponses, ReadDdmTrainingCommandErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDdmTrainingCommandResponses,
+    ReadDdmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}',
+    ...options,
+  })
+
+/**
+ * Cancel A Ddm Training Command
+ *
+ * 仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。
+ */
+export const cancelDdmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<CancelDdmTrainingCommandData, ThrowOnError>,
+): RequestResult<CancelDdmTrainingCommandResponses, CancelDdmTrainingCommandErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CancelDdmTrainingCommandResponses,
+    CancelDdmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/cancel',
+    ...options,
+  })
+
+/**
+ * Read A Ddm Training Result
+ *
+ * 返回结果登记事实与已授权数据通道地址；不在此中转大体积字节。
+ */
+export const readDdmTrainingResult = <ThrowOnError extends boolean = false>(
+  options: Options<ReadDdmTrainingResultData, ThrowOnError>,
+): RequestResult<ReadDdmTrainingResultResponses, ReadDdmTrainingResultErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadDdmTrainingResultResponses,
+    ReadDdmTrainingResultErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/result',
+    ...options,
+  })
+
+/**
  * List The Dataset Members
  */
 export const listDatasetMembers = <ThrowOnError extends boolean = false>(
@@ -2665,5 +3373,93 @@ export const readVlmCandidate = <ThrowOnError extends boolean = false>(
 ): RequestResult<ReadVlmCandidateResponses, ReadVlmCandidateErrors, ThrowOnError> =>
   (options.client ?? client).get<ReadVlmCandidateResponses, ReadVlmCandidateErrors, ThrowOnError>({
     url: '/api/v1/training-datasets/{dataset_id}/vlm-candidates/{candidate_id}',
+    ...options,
+  })
+
+/**
+ * List The Vlm Training Commands
+ *
+ * 重新打开页面后按数据集恢复原 VLM 命令，不依赖页面内缓存。
+ */
+export const listVlmTrainingCommands = <ThrowOnError extends boolean = false>(
+  options: Options<ListVlmTrainingCommandsData, ThrowOnError>,
+): RequestResult<ListVlmTrainingCommandsResponses, ListVlmTrainingCommandsErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ListVlmTrainingCommandsResponses,
+    ListVlmTrainingCommandsErrors,
+    ThrowOnError
+  >({ url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands', ...options })
+
+/**
+ * Request A Vlm Training Command
+ *
+ * 受理一条 VLM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。
+ */
+export const requestVlmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<RequestVlmTrainingCommandData, ThrowOnError>,
+): RequestResult<
+  RequestVlmTrainingCommandResponses,
+  RequestVlmTrainingCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    RequestVlmTrainingCommandResponses,
+    RequestVlmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read A Vlm Training Command
+ */
+export const readVlmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ReadVlmTrainingCommandData, ThrowOnError>,
+): RequestResult<ReadVlmTrainingCommandResponses, ReadVlmTrainingCommandErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadVlmTrainingCommandResponses,
+    ReadVlmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}',
+    ...options,
+  })
+
+/**
+ * Cancel A Vlm Training Command
+ *
+ * 未派发命令直接取消；已派发只记录取消请求，响应文案不证明进程已停止。
+ */
+export const cancelVlmTrainingCommand = <ThrowOnError extends boolean = false>(
+  options: Options<CancelVlmTrainingCommandData, ThrowOnError>,
+): RequestResult<CancelVlmTrainingCommandResponses, CancelVlmTrainingCommandErrors, ThrowOnError> =>
+  (options.client ?? client).post<
+    CancelVlmTrainingCommandResponses,
+    CancelVlmTrainingCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/cancel',
+    ...options,
+  })
+
+/**
+ * Read A Vlm Training Result
+ *
+ * 返回 VLM 结果登记事实与已授权数据通道地址；不在此中转大体积字节。
+ */
+export const readVlmTrainingResult = <ThrowOnError extends boolean = false>(
+  options: Options<ReadVlmTrainingResultData, ThrowOnError>,
+): RequestResult<ReadVlmTrainingResultResponses, ReadVlmTrainingResultErrors, ThrowOnError> =>
+  (options.client ?? client).get<
+    ReadVlmTrainingResultResponses,
+    ReadVlmTrainingResultErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/result',
     ...options,
   })

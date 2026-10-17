@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from threading import RLock
 from typing import Protocol
 
@@ -56,13 +57,20 @@ from edge_runtime.local_state.execution import LocalExecutionLeaseStore
 from edge_runtime.local_state.queues import (
     REPORT_RUN_ID,
     BackendReportContext,
+    EvidenceDeletionJournal,
     EvidenceSource,
     PendingHealthReport,
     PendingObservationReport,
     PendingReport,
     PendingSopInstanceReport,
+    RegisteredEvidenceMedia,
     ReportContext,
     StationQueues,
+)
+from edge_runtime.local_state.retention import (
+    DEFAULT_RECLAIM_LIMIT,
+    ReportedReclamation,
+    reclaim_reported_reports,
 )
 from edge_runtime.local_state.schema import migrate
 
@@ -193,7 +201,7 @@ class ReportStore(Protocol):
 
     def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
 
-    def mark_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+    def mark_reported(self, queue_id: int, *, at: HostInstant, acknowledged_at: str) -> None: ...
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
@@ -203,7 +211,9 @@ class ReportStore(Protocol):
 
     def freeze_observation_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
 
-    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+    def mark_observation_reported(
+        self, queue_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None: ...
 
     def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
@@ -212,13 +222,17 @@ class ReportStore(Protocol):
     def pending_health_item(self, queue_id: int) -> PendingHealthReport: ...
 
     def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str: ...
-    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None: ...
+    def mark_health_reported(
+        self, queue_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None: ...
 
     def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None: ...
 
     def pending_disposal_ids(self, *, limit: int | None = None) -> tuple[int, ...]: ...
     def disposal_report(self, disposal_id: int, *, reported_at: str) -> ReportedDisposal: ...
-    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None: ...
+    def mark_disposal_reported(
+        self, disposal_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None: ...
     def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None: ...
 
 
@@ -820,6 +834,32 @@ class StationStore(StationQueues):
         return 1 if highest is None else int(highest) + 1
 
 
+def _deletion_journal_entry(row: sqlite3.Row) -> EvidenceDeletionJournal:
+    """把本机删除账本行读成领域对象; 布局只在本模块维护。"""
+    return EvidenceDeletionJournal(
+        evidence_id=str(row["evidence_id"]),
+        station_id=str(row["station_id"]),
+        instance_id=int(row["instance_id"]),
+        claim_id=str(row["claim_id"]),
+        ticket=str(row["ticket"]),
+        claim_expires_at=(
+            None if row["claim_expires_at"] is None else float(row["claim_expires_at"])
+        ),
+        stage=str(row["stage"]),
+        outcome=None if row["outcome"] is None else str(row["outcome"]),
+        reason_code=None if row["reason_code"] is None else str(row["reason_code"]),
+        detail=None if row["detail"] is None else str(row["detail"]),
+        generation=str(row["generation"]),
+        observed_sha256=str(row["observed_sha256"]),
+        observed_size=int(row["observed_size"]),
+        reference=str(row["reference"]),
+        created_at=float(row["created_at"]),
+        updated_at=float(row["updated_at"]),
+        attempts=int(row["attempts"]),
+        last_error=None if row["last_error"] is None else str(row["last_error"]),
+    )
+
+
 class LocalState:
     """推理机的本地数据库; 多个工位共享一个 SQLite 文件。"""
 
@@ -836,6 +876,10 @@ class LocalState:
         self._notify_report_pending = notify_report_pending
         self._evidence_source = evidence_source
         self._queue_capacity = queue_capacity
+        # 已上报队列的 keyset 扫描位置(每表最后检查的 queue_id); 不是保护/资格缓存,
+        # 也不等义于任何持久化权威。进程重启后从各表最小 queue_id 重新开始。
+        self._reclaim_positions: dict[str, int] = {}
+        self._evidence_scan_position: tuple[int, int] = (-1, 0)
 
     def station(
         self, station_id: str, *, report_context: ReportContext | None = None
@@ -880,6 +924,179 @@ class LocalState:
             ).fetchall()
         return tuple(str(row["station_id"]) for row in rows)
 
+    def registered_evidence_stations(self) -> tuple[str, ...]:
+        """跨工位返回已有已登记证据产物的工位; 工位已从当前配置移除也要返回 (§5.19)。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT station_id FROM local_evidence_queue
+                 WHERE registered_at IS NOT NULL AND media_results IS NOT NULL
+                UNION
+                SELECT station_id FROM local_reclip_request
+                 WHERE registered_at IS NOT NULL AND media_results IS NOT NULL
+                ORDER BY station_id
+                """
+            ).fetchall()
+        return tuple(str(row["station_id"]) for row in rows)
+
+    @contextmanager
+    def guard(self) -> Iterator[None]:
+        """本机 SQLite 写事务临界区; 删前校验、取消链接与结果落账在同一事务边界内。
+
+        与仅进程内 ``RLock`` 不同, 这里真实取 ``BEGIN IMMEDIATE`` 的 RESERVED 锁: 另一个连接/进程
+        在同一证据目录上的配置确认或切片写入会被 SQLite 拒绝, 不会在删前校验与取消链接之间插入。
+        临界区内不得做网络等待; 取消链接后必须先把结果写入本事务再提交。
+        """
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                if self._connection.in_transaction:
+                    self._connection.execute("ROLLBACK")
+                raise
+            else:
+                self._connection.execute("COMMIT")
+
+    def record_deletion_intent(
+        self,
+        *,
+        evidence_id: str,
+        station_id: str,
+        instance_id: int,
+        claim_id: str,
+        ticket: str,
+        claim_expires_at: float | None,
+        generation: str,
+        observed_sha256: str,
+        observed_size: int,
+        reference: str,
+        at: float,
+    ) -> None:
+        """幂等登记一条已领到的删除意图; 已有同证据行时不覆盖既有进度。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO local_evidence_deletion (
+                    evidence_id, station_id, instance_id, claim_id, ticket, claim_expires_at,
+                    stage, outcome, reason_code, detail, generation, observed_sha256,
+                    observed_size, reference, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'claimed', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (evidence_id) DO NOTHING
+                """,
+                (
+                    evidence_id,
+                    station_id,
+                    instance_id,
+                    claim_id,
+                    ticket,
+                    claim_expires_at,
+                    generation,
+                    observed_sha256,
+                    observed_size,
+                    reference,
+                    at,
+                    at,
+                ),
+            )
+
+    def registered_evidence_batch(self, *, limit: int) -> tuple[RegisteredEvidenceMedia, ...]:
+        """跨工位有界遍历已登记产物; 位置只是扫描进度, 重启从头且不缓存删除资格。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM (
+                    SELECT 0 AS source, rowid AS cursor_id, station_id, instance_id, queue_id,
+                           NULL AS identity, covered_from, covered_to, media_results
+                      FROM local_evidence_queue
+                     WHERE registered_at IS NOT NULL AND media_results IS NOT NULL
+                       AND covered_from IS NOT NULL AND covered_to IS NOT NULL
+                    UNION ALL
+                    SELECT 1 AS source, rowid AS cursor_id, station_id, instance_id,
+                           NULL AS queue_id, identity, covered_from, covered_to, media_results
+                      FROM local_reclip_request
+                     WHERE registered_at IS NOT NULL AND media_results IS NOT NULL
+                       AND identity IS NOT NULL AND covered_from IS NOT NULL
+                       AND covered_to IS NOT NULL
+                ) WHERE (source, cursor_id) > (?, ?)
+                  ORDER BY source, cursor_id LIMIT ?
+                """,
+                (*self._evidence_scan_position, limit),
+            ).fetchall()
+            self._evidence_scan_position = (
+                (int(rows[-1]["source"]), int(rows[-1]["cursor_id"]))
+                if len(rows) == limit
+                else (-1, 0)
+            )
+        return tuple(
+            RegisteredEvidenceMedia(
+                station_id=str(row["station_id"]),
+                instance_id=int(row["instance_id"]),
+                queue_id=None if row["queue_id"] is None else int(row["queue_id"]),
+                identity=None if row["identity"] is None else str(row["identity"]),
+                covered_from=float(row["covered_from"]),
+                covered_to=float(row["covered_to"]),
+                media_results=str(row["media_results"]),
+            )
+            for row in rows
+        )
+
+    def deletion_journal(
+        self,
+        *,
+        limit: int | None = None,
+        evidence_id: str | None = None,
+    ) -> tuple[EvidenceDeletionJournal, ...]:
+        """未完成意图按最近尝试时刻轮转; 可按对象查找或限制本轮恢复工作量。"""
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT * FROM local_evidence_deletion
+                   WHERE (? IS NULL OR evidence_id = ?)
+                   ORDER BY updated_at, evidence_id LIMIT ?""",
+                (evidence_id, evidence_id, -1 if limit is None else limit),
+            ).fetchall()
+        return tuple(_deletion_journal_entry(row) for row in rows)
+
+    def record_deletion_result(
+        self,
+        evidence_id: str,
+        *,
+        outcome: str,
+        reason_code: str,
+        detail: str | None,
+        at: float,
+    ) -> None:
+        """在本事务内把本机终局结果落账; 取消链接成功时与文件删除同事务提交。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_evidence_deletion
+                   SET stage = 'result_pending', outcome = ?, reason_code = ?, detail = ?,
+                       updated_at = ?
+                 WHERE evidence_id = ?
+                """,
+                (outcome, reason_code, detail, at, evidence_id),
+            )
+
+    def record_deletion_failure(self, evidence_id: str, *, error: str, at: float) -> None:
+        """记录一次可恢复失败(中心不可达/验证未完成); 保留同一意图等待下一轮。"""
+        with self._lock:
+            self._connection.execute(
+                """
+                UPDATE local_evidence_deletion
+                   SET attempts = attempts + 1, last_error = ?, updated_at = ?
+                 WHERE evidence_id = ?
+                """,
+                (error[:255], at, evidence_id),
+            )
+
+    def clear_deletion_intent(self, evidence_id: str) -> None:
+        """终局结果已被中心确认后移除账本行。"""
+        with self._lock:
+            self._connection.execute(
+                "DELETE FROM local_evidence_deletion WHERE evidence_id = ?", (evidence_id,)
+            )
+
     def queue_status(self) -> tuple[QueueStatus, ...]:
         """跨工位查看未确认深度、最早待办、最近失败和配置的容量边界。"""
         with self._lock:
@@ -889,6 +1106,33 @@ class LocalState:
                 _queue_status(self._connection, "observation", self._queue_capacity.observations),
                 _queue_status(self._connection, "health", self._queue_capacity.health),
             )
+
+    def reclaim_reported(
+        self, *, now: datetime, limit: int = DEFAULT_RECLAIM_LIMIT
+    ) -> ReportedReclamation:
+        """按最后确认配置有界裁剪本机已上报队列的逻辑行;不删除证据媒体或处置账本。
+
+        读取与删除在同一把锁和同一 ``BEGIN IMMEDIATE`` 事务内完成,不接收调用方策略;每表本轮
+        只读取一个 ``queue_id`` keyset 页(最多 ``limit`` 行,含待上报行)。扫描位置只在本事务成功
+        ``COMMIT`` 后前移;COMMIT 或任何 SQLite 故障先整体回滚并向上传播,不采纳新位置,保持本地
+        状态的致命语义。
+        """
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                result, positions = reclaim_reported_reports(
+                    self._connection,
+                    now=now,
+                    limit=limit,
+                    positions=self._reclaim_positions,
+                )
+                self._connection.execute("COMMIT")
+            except Exception:
+                if self._connection.in_transaction:
+                    self._connection.execute("ROLLBACK")
+                raise
+            self._reclaim_positions = positions
+        return result
 
     def reports(self) -> ReportStore:
         """返回该主机 decision/instance 待上报事实的持久接缝。"""
@@ -958,8 +1202,8 @@ class _HostReportStore:
     def freeze_reported_at(self, queue_id: int, *, candidate: str) -> str:
         return self._queue(queue_id).freeze_reported_at(queue_id, candidate=candidate)
 
-    def mark_reported(self, queue_id: int, *, at: HostInstant) -> None:
-        self._queue(queue_id).mark_reported(queue_id, at=at)
+    def mark_reported(self, queue_id: int, *, at: HostInstant, acknowledged_at: str) -> None:
+        self._queue(queue_id).mark_reported(queue_id, at=at, acknowledged_at=acknowledged_at)
 
     def record_report_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
         self._queue(queue_id).record_report_failure(queue_id, at=at, error=error)
@@ -1000,8 +1244,12 @@ class _HostReportStore:
             queue_id, candidate=candidate
         )
 
-    def mark_observation_reported(self, queue_id: int, *, at: HostInstant) -> None:
-        self._observation_queue(queue_id).mark_observation_reported(queue_id, at=at)
+    def mark_observation_reported(
+        self, queue_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None:
+        self._observation_queue(queue_id).mark_observation_reported(
+            queue_id, at=at, acknowledged_at=acknowledged_at
+        )
 
     def record_observation_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
         self._observation_queue(queue_id).record_observation_failure(queue_id, at=at, error=error)
@@ -1022,8 +1270,10 @@ class _HostReportStore:
     def freeze_health_reported_at(self, queue_id: int, *, candidate: str) -> str:
         return self._health_queue(queue_id).freeze_health_reported_at(queue_id, candidate=candidate)
 
-    def mark_health_reported(self, queue_id: int, *, at: HostInstant) -> None:
-        self._health_queue(queue_id).mark_health_reported(queue_id, at=at)
+    def mark_health_reported(self, queue_id: int, *, at: HostInstant, acknowledged_at: str) -> None:
+        self._health_queue(queue_id).mark_health_reported(
+            queue_id, at=at, acknowledged_at=acknowledged_at
+        )
 
     def record_health_failure(self, queue_id: int, *, at: HostInstant, error: str) -> None:
         self._health_queue(queue_id).record_health_failure(queue_id, at=at, error=error)
@@ -1046,8 +1296,12 @@ class _HostReportStore:
             disposal_id, reported_at=reported_at
         )
 
-    def mark_disposal_reported(self, disposal_id: int, *, at: HostInstant) -> None:
-        LocalDisposalLedger(self._connection, self._lock).mark_reported(disposal_id, at=at.seconds)
+    def mark_disposal_reported(
+        self, disposal_id: int, *, at: HostInstant, acknowledged_at: str
+    ) -> None:
+        LocalDisposalLedger(self._connection, self._lock).mark_reported(
+            disposal_id, at=at.seconds, acknowledged_at=acknowledged_at
+        )
 
     def record_disposal_failure(self, disposal_id: int, *, at: HostInstant, error: str) -> None:
         LocalDisposalLedger(self._connection, self._lock).record_report_failure(

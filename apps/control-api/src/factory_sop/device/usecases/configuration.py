@@ -23,12 +23,14 @@ from factory_sop.device.repository import (
     StationRepository,
 )
 from factory_sop.device.usecases.commands import authenticate_command_host
+from factory_sop.retention.api import DeletionAuthorityFence
 from nvsop_contracts import (
     ConfigurationBundle,
     ConfiguredCamera,
     ConfiguredConnector,
     ConfiguredPoint,
     ConfiguredStation,
+    ResolvedRetentionPolicy,
     ResolvedRuntimeParameters,
 )
 
@@ -37,6 +39,10 @@ class ConfigurationHostRepository(InferenceHostRepository, Protocol):
     def next_configuration_revision(
         self, *, host_id: UUID, content_sha256: str, minimum_revision: int = 0
     ) -> int: ...
+
+    def configuration_content_changed(self, *, host_id: UUID, content_sha256: str) -> bool:
+        """锁定主机行并判断该有效配置是否与当前分配不同（同一事务内的权威判断）。"""
+        ...
 
     def configuration_was_issued(
         self,
@@ -61,6 +67,7 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
         cameras: CameraRepository,
         connectors: ConnectorRepository,
         points: PointRepository,
+        fence: DeletionAuthorityFence | None = None,
     ) -> None:
         self._hosts = hosts
         self._backends = backends
@@ -68,6 +75,7 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
         self._cameras = cameras
         self._connectors = connectors
         self._points = points
+        self._fence = fence
 
     def authenticate(self, *, host: InferenceHostIdentity, now: datetime) -> None:
         authenticate_command_host(host=host, now=now, hosts=self._hosts)
@@ -112,6 +120,7 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
         host_id: UUID,
         target: DeviceConfigurationTarget,
         runtime_defaults: ResolvedRuntimeParameters | None,
+        retention: ResolvedRetentionPolicy,
     ) -> ConfiguredStation:
         host = self._hosts.by_id(host_id)
         backend = self._backends.by_id(target.backend_id)
@@ -187,6 +196,7 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
                 step_deadline_seconds=effective.step_deadline_seconds,
                 disposition_policy=effective.disposition_policy,
             ),
+            retention=retention,
             connectors=tuple(
                 sorted(
                     (
@@ -246,6 +256,16 @@ class RepositoryDeviceConfigurationGateway(DeviceConfigurationGateway):
     def finalize_configuration(
         self, candidate: ConfigurationBundle, *, minimum_revision: int
     ) -> ConfigurationBundle:
+        # 先取权威锁（锁序：advisory → 主机行）。只有有效配置确实变化才拒绝：
+        # 同一有效配置下的签名 GET/租约续期不改写删除所依据的权威，不得被在途删除阻断。
+        if self._fence is not None:
+            self._fence.lock_authority()
+        changed = self._hosts.configuration_content_changed(
+            host_id=UUID(candidate.host_id), content_sha256=candidate.effective_sha256
+        )
+        if changed and self._fence is not None:
+            # 主机行已在同一事务锁定，此检查与实际修订推进在同一临界区内完成，无 TOCTOU。
+            self._fence.ensure_mutable()
         revision = self._hosts.next_configuration_revision(
             host_id=UUID(candidate.host_id),
             content_sha256=candidate.effective_sha256,

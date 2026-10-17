@@ -91,6 +91,8 @@ class ApplyMediaExportTest(unittest.TestCase):
                             "startup_timeout_seconds": 2,
                             "transcode_threads": 2,
                             "recording_compression_age_seconds": 3600,
+                            "recording_compression_enabled": True,
+                            "recording_compression_crf": 30,
                             "cameras": [{"camera_id": camera_id, "sop_execution": False}],
                         },
                     }
@@ -102,8 +104,10 @@ class ApplyMediaExportTest(unittest.TestCase):
 
             result = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(str(root / "recordings"), result["media"]["recording_directory"])
-            # 本机原始素材窗口在合并后保留，不被中心导出覆盖或丢弃。
+            # 本机压缩策略在合并后保留，不被中心导出覆盖或丢弃。
             self.assertEqual(3600, result["media"]["recording_compression_age_seconds"])
+            self.assertTrue(result["media"]["recording_compression_enabled"])
+            self.assertEqual(30, result["media"]["recording_compression_crf"])
             self.assertEqual(camera_id, result["media"]["cameras"][0]["camera_id"])
             self.assertFalse(result["media"]["cameras"][0]["sop_execution"])
             rendered = json.dumps(result)
@@ -111,6 +115,44 @@ class ApplyMediaExportTest(unittest.TestCase):
             self.assertNotIn("edge-user-for-test", rendered)
             self.assertNotIn("edge-password-for-test", rendered)
             self.assertEqual(0o600, output.stat().st_mode & 0o777)
+
+            # 新导出将中心高水位送达本机, 旧导出不要求新增字段。
+            with_watermark = json.loads(export.read_text(encoding="utf-8"))
+            with_watermark["disk_watermark_percent"] = 85
+            export.write_text(json.dumps(with_watermark), encoding="utf-8")
+            MODULE.apply_export(export, edge, output)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(
+                {
+                    "high_watermark_percent": 85,
+                    "recovery_watermark_percent": 76.5,
+                    "check_interval_seconds": 5,
+                },
+                result["disk_health"],
+            )
+            local = json.loads(edge.read_text(encoding="utf-8"))
+            local["disk_health"] = None
+            edge.write_text(json.dumps(local), encoding="utf-8")
+            MODULE.apply_export(export, edge, output)
+            self.assertEqual(
+                result["disk_health"],
+                json.loads(output.read_text(encoding="utf-8"))["disk_health"],
+            )
+            local["disk_health"] = {
+                "high_watermark_percent": 90,
+                "recovery_watermark_percent": 70,
+                "check_interval_seconds": 3,
+            }
+            edge.write_text(json.dumps(local), encoding="utf-8")
+            MODULE.apply_export(export, edge, output)
+            applied = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(70, applied["disk_health"]["recovery_watermark_percent"])
+            self.assertEqual(3, applied["disk_health"]["check_interval_seconds"])
+            local["disk_health"]["recovery_watermark_percent"] = 86
+            edge.write_text(json.dumps(local), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                MODULE.apply_export(export, edge, output)
+            self.assertEqual(applied, json.loads(output.read_text(encoding="utf-8")))
 
             recordings = root / "recordings" / "camera"
             recordings.mkdir(parents=True)

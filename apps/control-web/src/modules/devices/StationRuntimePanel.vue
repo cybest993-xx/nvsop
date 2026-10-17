@@ -86,6 +86,50 @@ const models = (sources: unknown) =>
   ((sources ?? []) as { backend_id: string; model_ids: string[] }[])
     .map((source) => `${source.backend_id}：${source.model_ids.join('、') || '无模型标识'}`)
     .join('；') || '未提供'
+type HealthFact = NonNullable<RuntimeStationProjection['health']>[number]
+const isStorage = (value: HealthFact) => value.stream_id?.startsWith('storage:') ?? false
+const isClock = (value: HealthFact) => value.stream_id?.startsWith('clock:') ?? false
+const clockSources: Record<string, string> = {
+  host_receipt: '主机接收时刻',
+  device_clock: '设备事件时间',
+  unknown: '来源未验证',
+}
+const clockStatuses: Record<string, string> = {
+  clock_host_receipt: '按已声明的主机接收时刻对齐（无设备时钟偏移测量）',
+  clock_verified: '设备时钟偏移区间在容差内',
+  clock_out_of_tolerance: '设备时钟偏移区间超阈值（不可对齐）',
+  clock_unverified: '时间偏移未验证（不可对齐）',
+}
+const storageLabels: Record<string, string> = {
+  'storage:recording': '连续录像',
+  'storage:evidence': '证据目录',
+  'storage:local_state': 'SQLite / 本地待办',
+}
+const percent = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(1))}%` : '未知'
+function detailFields(detail: string | null): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(detail ?? 'null')
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+const storageRows = (value: RuntimeStationProjection) =>
+  (value.health ?? [])
+    .filter(isStorage)
+    .map((fact) => ({ fact, metrics: detailFields(fact.detail) }))
+const clockRows = (value: RuntimeStationProjection) =>
+  (value.health ?? [])
+    .filter(isClock)
+    .map((fact) => ({ fact, evidence: detailFields(fact.detail) }))
+const streamRows = (value: RuntimeStationProjection) =>
+  (value.health ?? []).filter((fact) => !isStorage(fact) && !isClock(fact))
+const offsetSeconds = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(3)} s` : null
+
 function update(value: RuntimeStationProjection): void {
   const current = projections.value.get(value.station_id)
   if (current && JSON.stringify(current) === JSON.stringify(value)) return
@@ -363,7 +407,7 @@ onUnmounted(() => {
         </section>
         <section aria-label="各路观测健康">
           <h4>各路观测健康</h4>
-          <article v-for="v in p.health ?? []" :key="v.event_id">
+          <article v-for="v in streamRows(p)" :key="v.event_id">
             <strong>{{ v.stream_id ?? '未标识流' }}：{{ v.status }}</strong>
             <p>
               原因 / 说明：{{ v.reason_code ? reasonLabel(v.reason_code) : '未提供' }} /
@@ -374,7 +418,63 @@ onUnmounted(() => {
               {{ time(v.anchor_offset) }}
             </p>
           </article>
-          <p v-if="!p.health?.length" class="muted">尚无流健康事实；不推断为健康。</p>
+          <p v-if="!streamRows(p).length" class="muted">尚无流健康事实；不推断为健康。</p>
+        </section>
+        <section aria-label="连接器时间偏移">
+          <h4>连接器时间偏移与验证状态</h4>
+          <p class="muted">
+            偏移只来自可核验的设备事件时间；不同推理机分别展示最后已知事实，不比较其单调钟或推断当前在役。
+          </p>
+          <article v-for="{ fact, evidence } in clockRows(p)" :key="fact.event_id">
+            <strong>{{ fact.stream_id?.slice(6) ?? '未知点位' }}</strong>
+            <p>来源推理机：{{ fact.host_id }}</p>
+            <p>
+              来源：{{ clockSources[String(evidence.timestamp_source)] ?? '未知来源' }}； 状态：{{
+                clockStatuses[fact.status] ?? `未识别状态（${fact.status}）`
+              }}
+            </p>
+            <p v-if="offsetSeconds(evidence.offset_seconds)">
+              设备－主机偏移：{{ offsetSeconds(evidence.offset_seconds) }}； 测量误差上界：{{
+                offsetSeconds(evidence.uncertainty_seconds) ?? '未提供'
+              }}；容差：{{ offsetSeconds(evidence.tolerance_seconds) ?? '未提供' }}
+            </p>
+            <p v-else>设备－主机偏移：未测得，不以零偏移代替。</p>
+            <p v-if="fact.reason_code">判定安全原因：{{ reasonLabel(fact.reason_code) }}</p>
+            <p class="muted">最近状态变更上报：{{ time(fact.occurred_at) }}</p>
+            <p v-if="hasConnected && !connected" role="status">
+              连接已中断；这里只是最后已知镜像，不表示当前已验证。
+            </p>
+          </article>
+          <p v-if="!clockRows(p).length" class="muted">
+            尚无连接器时钟事实；不推断设备与主机时钟已对齐。
+          </p>
+        </section>
+        <section aria-label="边缘存储健康">
+          <h4>边缘存储健康</h4>
+          <article
+            v-for="{ fact, metrics } in storageRows(p)"
+            :key="fact.event_id"
+            class="runtime__storage"
+          >
+            <div class="runtime__storage-heading">
+              <strong>{{ storageLabels[fact.stream_id ?? ''] ?? fact.stream_id }}</strong>
+              <el-tag :type="fact.status === 'delivering' ? 'success' : 'danger'" size="small">
+                {{ fact.status === 'delivering' ? '存储可用' : '存储失效' }}
+              </el-tag>
+            </div>
+            <p v-if="typeof metrics.used_percent === 'number'">
+              使用 {{ percent(metrics.used_percent) }}
+            </p>
+            <p v-else>暂无容量测量</p>
+            <p class="muted">
+              高水位 ≥ {{ percent(metrics.high_watermark_percent) }} · 恢复 ≤
+              {{ percent(metrics.recovery_watermark_percent) }}
+            </p>
+            <p v-if="typeof metrics.path === 'string'" class="muted">{{ metrics.path }}</p>
+            <p v-if="typeof metrics.error === 'string'" role="alert">{{ metrics.error }}</p>
+            <p class="muted">最近上报 {{ time(fact.occurred_at) }}</p>
+          </article>
+          <p v-if="!storageRows(p).length" class="muted">尚无存储健康事实。</p>
         </section>
       </div>
     </article>
@@ -418,6 +518,19 @@ onUnmounted(() => {
 .runtime__grid section {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.runtime__storage {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.runtime__storage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.runtime__storage p {
+  margin: 0.4rem 0 0;
 }
 .runtime dl {
   display: grid;

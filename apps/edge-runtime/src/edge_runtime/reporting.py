@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 
 from nvsop_contracts import (
@@ -95,6 +96,11 @@ LIVE_REPORT_WINDOW_SECONDS = 30.0
 EXECUTION_AUTHORITY_HEARTBEAT_SECONDS = 60.0
 
 
+def _utc_now() -> str:
+    """在成功响应之后读取确认墙钟,不复用可能经历长时间重试的上报时刻。"""
+    return datetime.now(UTC).isoformat()
+
+
 class HostReportReconciler:
     """排空本机结构化事实,但绝不阻塞判定持久化。"""
 
@@ -106,7 +112,9 @@ class HostReportReconciler:
         execution_authorities: (
             Callable[[str], tuple[ReportedExecutionAuthority, ...]] | None
         ) = None,
+        utc_now: Callable[[], str] = _utc_now,
     ) -> None:
+        self._utc_now = utc_now
         self._reports = reports
         self._transport = transport
         self._execution_authorities = execution_authorities
@@ -178,7 +186,9 @@ class HostReportReconciler:
                         )
                     )
                     continue
-                self._reports.mark_reported(pending.queue_id, at=now)
+                self._reports.mark_reported(
+                    pending.queue_id, at=now, acknowledged_at=self._utc_now()
+                )
                 attempts.append(
                     ReportAttempt(queue_id=pending.queue_id, sent=True, event_id=event_id)
                 )
@@ -255,7 +265,7 @@ class HostReportReconciler:
                     )
                 )
                 continue
-            self._reports.mark_reported(pending.queue_id, at=now)
+            self._reports.mark_reported(pending.queue_id, at=now, acknowledged_at=self._utc_now())
             attempts.append(
                 ReportAttempt(
                     queue_id=pending.queue_id,
@@ -366,7 +376,9 @@ class HostReportReconciler:
                     )
                 )
                 continue
-            self._reports.mark_observation_reported(pending.queue_id, at=now)
+            self._reports.mark_observation_reported(
+                pending.queue_id, at=now, acknowledged_at=self._utc_now()
+            )
             attempts.append(
                 ReportAttempt(queue_id=pending.queue_id, sent=True, event_id=report.event_id)
             )
@@ -396,7 +408,9 @@ class HostReportReconciler:
                 self._reports.record_disposal_failure(disposal_id, at=now, error=message)
                 attempts.append(ReportAttempt(disposal_id, False, event_id, message))
                 continue
-            self._reports.mark_disposal_reported(disposal_id, at=now)
+            self._reports.mark_disposal_reported(
+                disposal_id, at=now, acknowledged_at=self._utc_now()
+            )
             attempts.append(ReportAttempt(disposal_id, True, event_id))
         return attempts
 
@@ -450,7 +464,7 @@ class HostReportReconciler:
                     )
                 )
                 continue
-            self._reports.mark_health_reported(queue_id, at=now)
+            self._reports.mark_health_reported(queue_id, at=now, acknowledged_at=self._utc_now())
             attempts.append(ReportAttempt(queue_id=queue_id, sent=True, event_id=report.event_id))
         return attempts
 
@@ -488,6 +502,14 @@ def reported_health_from_pending(
 ) -> ReportedHealth:
     """映射本地持久健康事实; 发生时刻与首次发送时刻各保留其原义。"""
     event_id = f"{pending.host_id}:health:{pending.queue_id}"
+    detail = pending.detail
+    if pending.stream_id is not None and pending.stream_id.startswith("clock:"):
+        # 身份已在 SQLite 固定; 重试仍保留原始入队顺序, 不取可能回拨的墙钟。
+        if detail is None:
+            raise ValueError("clock health report requires evidence detail")
+        detail = json.dumps(
+            {**json.loads(detail), "edge_fact_order": pending.queue_id}, ensure_ascii=False
+        )
     return ReportedHealth(
         event_id=event_id,
         trace_id=event_id,
@@ -496,7 +518,7 @@ def reported_health_from_pending(
         stream_id=pending.stream_id,
         status=pending.status,
         reason_code=pending.reason_code,
-        detail=pending.detail,
+        detail=detail,
         occurred_at=pending.occurred_at,
         source_anchor=pending.source_anchor,
         anchor_offset=pending.anchor_offset,

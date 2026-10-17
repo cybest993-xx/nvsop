@@ -16,6 +16,9 @@ from typing import Any
 
 BASE = Path(__file__).resolve().parents[3] / "vendor/sop-monitoring-blueprints"
 MODULE_PATH = BASE / "microservices/sop-training-bp/assets/tools/cosmos_custom_dataset.py"
+DISCOVERY_PATH = (
+    BASE / "microservices/sop-training-bp/microservices/cr-training-ms/utils/dataset_utils.py"
+)
 
 
 class _VisionConfig:
@@ -153,6 +156,79 @@ class VlmReaderContractTest(unittest.TestCase):
                 dataset[0]
                 self.assertEqual(captured["user_prompt"], "问题")
                 self.assertEqual(captured["response"], "回答")
+                self.assertEqual(captured["videos"], [str(video)])
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = value
+
+    def test_materialized_layout_is_discovered_and_consumed_only_from_the_reader_dir(
+        self,
+    ) -> None:
+        """真实递归发现只拿到 reader/ 内候选记录，管理清单在父目录不进入训练。"""
+        captured: dict[str, Any] = {}
+        stubs = _module_stubs(captured)
+        previous = {name: sys.modules.get(name) for name in stubs}
+        sys.modules.update(stubs)
+        try:
+            with TemporaryDirectory() as directory:
+                root = Path(directory)
+                # 与 materialize_vlm_input 相同：管理清单在根，reader/ 只放记录与媒体。
+                (root / "vlm_input_manifest.json").write_text(
+                    json.dumps({"input_id": "management-only"}), encoding="utf-8"
+                )
+                reader_directory = root / "reader"
+                reader_directory.mkdir()
+                video = reader_directory / "video-a.mp4"
+                video.write_bytes(b"synthetic")
+                records_path = reader_directory / "vlm_candidate_records.json"
+                records_path.write_text(
+                    json.dumps(
+                        [
+                            {
+                                "conversations": [
+                                    {"from": "human", "value": "<video>\n问题"},
+                                    {"from": "gpt", "value": "回答"},
+                                ],
+                                "video": "registered/video-a.mp4",
+                            }
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+
+                discovery_spec = importlib.util.spec_from_file_location(
+                    "nvsop_base_vlm_json_discovery", DISCOVERY_PATH
+                )
+                self.assertIsNotNone(discovery_spec)
+                assert discovery_spec is not None and discovery_spec.loader is not None
+                discovery = importlib.util.module_from_spec(discovery_spec)
+                discovery_spec.loader.exec_module(discovery)
+                discovered = discovery.get_all_json_paths(str(reader_directory))
+                self.assertEqual(discovered, [str(records_path)])
+
+                spec = importlib.util.spec_from_file_location(
+                    "nvsop_base_vlm_reader_layout", MODULE_PATH
+                )
+                self.assertIsNotNone(spec)
+                assert spec is not None and spec.loader is not None
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                config = types.SimpleNamespace(
+                    train=types.SimpleNamespace(
+                        train_policy=types.SimpleNamespace(
+                            dataset=types.SimpleNamespace(name=discovered, split=["train"])
+                        )
+                    )
+                )
+                dataset = module.CosmosSFTDataset(
+                    config=config, custom_config=module.CustomConfig()
+                )
+                self.assertEqual(len(dataset), 1)
+                dataset[0]
+                self.assertEqual(captured["user_prompt"], "问题")
                 self.assertEqual(captured["videos"], [str(video)])
         finally:
             for name, value in previous.items():

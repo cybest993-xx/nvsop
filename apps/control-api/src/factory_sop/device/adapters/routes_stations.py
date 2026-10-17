@@ -9,7 +9,13 @@ from pydantic import BaseModel, Field, field_validator
 
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.device.adapters import route_support
-from factory_sop.device.adapters.dependencies import cameras, connectors, points, stations
+from factory_sop.device.adapters.dependencies import (
+    cameras,
+    connectors,
+    deletion_authority_fence,
+    points,
+    stations,
+)
 from factory_sop.device.model import DeviceStatus, Station
 from factory_sop.device.repository import (
     CameraRepository,
@@ -26,6 +32,7 @@ from factory_sop.device.usecases.stations import (
     station_by_identifier,
 )
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
+from factory_sop.retention.api import DeletionAuthorityFence
 
 router = APIRouter(prefix="/stations", tags=["device"], responses=route_support._UNAUTHORIZED)
 
@@ -162,6 +169,7 @@ def set_the_station_status(
     requested: StationStatus,
     caller: Authorized,
     station_store: Annotated[StationRepository, Depends(stations)],
+    fence: Annotated[DeletionAuthorityFence, Depends(deletion_authority_fence)],
     if_match: Annotated[int, Header(alias="If-Match")],
 ) -> StationView:
     station = set_station_status(
@@ -171,6 +179,7 @@ def set_the_station_status(
         caller=caller,
         now=datetime.now(UTC),
         stations=station_store,
+        fence=fence,
     )
     return _view(station)
 

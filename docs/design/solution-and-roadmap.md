@@ -202,10 +202,11 @@
 
 ### 中心（PostgreSQL）
 
-- **配置域**（`device`）：`device_inference_host`（物理推理机：主机标识、网络地址、mediamtx 地址、健康状态、时钟偏移、**录像滚动窗口时长与磁盘水位阈值**，§5.19）、`device_inference_backend`（**一份模板配置的进程端点**：外键 → host、base_url、承载的模板绑定、健康状态）、`device_station`（含运行参数覆盖状态与覆盖组，§5.3；保留策略覆盖状态与覆盖组，§5.19）、`device_camera`（主/子码流路径、凭据已配置标志、外键 → station 与 inference_backend）。
+- **配置域**（`device`）：`device_inference_host`（物理推理机：主机标识、网络地址、mediamtx 地址、健康状态、时钟偏移、**录像滚动窗口时长与磁盘水位阈值**，§5.19）、`device_inference_backend`（**一份模板配置的进程端点**：外键 → host、base_url、承载的模板绑定、健康状态）、`device_station`（含运行参数覆盖状态与覆盖组，§5.3）、`device_camera`（主/子码流路径、凭据已配置标志、外键 → station 与 inference_backend）。
 - **物理执行权域**（`execution`）：`execution_station_grant`（某工位的物理执行权当前归哪台推理机、租约到期时刻、续期时刻）、`execution_handover`（改绑握手请求与交权确认；强制改绑的两名确认人、警示已展示标志、确认时刻）。见 §5.17。
 - **委托命令队列**（`device`）：`device_pending_command`（目标推理机、命令类型 = 测试连接 / 再切片、参数、幂等键、状态与回报结果）。中心不推、推理机拉（§5.3），故一切需要推理机代为执行的动作都经此队列；ADR-0008 的"测试连接委托推理机执行"与 §5.20 的再切片是同一机制的两个命令类型。
-- **保留策略域**（`retention`）：`retention_policy`（全局默认与工位覆盖组：三个判定类别各自的证据保留时长、记录明细保留时长、压缩起始年龄、聚合归档年龄；覆盖为整组替换）、`retention_sweep`（每次回收任务的执行记录：范围、删除计数、跳过计数与跳过原因、起止时刻），使"上次删了什么、为什么跳过"可查。录像滚动窗口不在此表——它按推理机配置，属 `device_inference_host`（§5.19）。
+- **保留策略域**（`retention`）：`retention_policy`（全局默认组：三个判定类别各自的证据保留时长、记录明细保留时长、压缩起始年龄、聚合归档年龄）、`retention_station_policy`（**工位覆盖记录**：每个工位最多一行，保存整组跟随全局默认或整组自定义的模式、覆盖组与记录版本；没有本行即跟随全局默认，覆盖为整组替换）、`retention_sweep`（每次回收任务的执行记录：范围、删除计数、跳过计数与跳过原因、起止时刻），使"上次删了什么、为什么跳过"可查。工位覆盖记录归 `retention`，`device_station` 不再持有任何保留配置；`device` 只为该记录提供工位存在与启用事实。录像滚动窗口不在此域——它按推理机配置，属 `device_inference_host`（§5.19）。
+
 - **连接器域**（`device`，仅配置）：`device_connector`（类型 = `hikvision_isapi` / `board_card`、连接参数、健康状态、**该适配器的能力声明**：投递方式、最大投递延迟、是否保序、是否可能丢边沿、时间戳来源，§5.8）、`device_connector_point`（方向 in/out、点位号、语义标签如"工件到位"/"停线联锁"、外键 → connector 与 station）。模板按语义标签引用点位，不写死设备地址。**工位可以没有任何连接器。**
 - **模板域**（`template`）：`template_sop`、`template_version`（不可变，含 Excel 导入引用、actions.json、vlm_prompts、**运行参数默认值**、顺序性声明、sha256、发布者与发布时刻）、`template_draft`（可编辑，含 `revision` 乐观锁列）、`template_station_binding`（`desired_version` / `reported_version`，后者由推理机上报，§5.3）。
 - **训练数据域**（`dataset`）：`dataset_training_dataset`、`dataset_member`（**数据集内的视频**：dataset 本地文件引用、来源、大小、sha256、时长、编码）、`dataset_action_list_revision`、`dataset_annotation_context`、`dataset_annotation_submission`、`dataset_annotation_execution`（动作时间段标注及其不可变执行候选）、`dataset_usage_check`（DDM/VLM 用途、状态、原因）、`dataset_artifact`（生成的 DDM `annotation.json` 等派生制品及摘要）。上传、标注、用途检查、转换和训练是不同状态，不合并成一个"成功"。

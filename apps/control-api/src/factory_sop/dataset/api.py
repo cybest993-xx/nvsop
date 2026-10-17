@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -60,12 +61,22 @@ from factory_sop.dataset.usecases.annotation import (
     save_annotation_execution_copy,
 )
 from factory_sop.dataset.usecases.usage import (
+    ConsumedDdmFile,
+    DdmInputConsumption,
+    DdmInputSelection,
+    FrozenDdmInput,
+    FrozenDdmInputSet,
+    FrozenDdmMemberInput,
+    MaterializedDdmInput,
     UsageCheckTarget,
     apply_usage_check_currentness,
     begin_usage_check,
     complete_usage_check,
     fail_usage_check,
+    freeze_ddm_input,
+    materialize_ddm_input,
     run_usage_check,
+    verify_ddm_input_consumption,
 )
 from factory_sop.job.api import ApplicationJob
 
@@ -112,8 +123,8 @@ class ArtifactTransactionCommitter(Protocol):
         ...
 
 
-class DatasetArtifactExecutor(Protocol):
-    """制品执行与候选清理的窄跨模块 seam。"""
+class DatasetCommandExecutor(Protocol):
+    """dataset owner 对持久 job 暴露的执行 seam。"""
 
     def execute(
         self,
@@ -125,6 +136,10 @@ class DatasetArtifactExecutor(Protocol):
     ) -> ArtifactExecutionResult:
         """执行一个已领取的制品任务。"""
         ...
+
+
+class DatasetArtifactExecutor(DatasetCommandExecutor, Protocol):
+    """制品执行与候选清理的既有公开 seam。"""
 
     def cleanup_candidates(self) -> None:
         """清理已持久化的未发布制品候选。"""
@@ -341,6 +356,46 @@ class DatasetValidationRuntime(Protocol):
         ...
 
 
+class TrainingJobOutcome(StrEnum):
+    """DDM 训练命令在通用 job 视角下的终态。"""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    PENDING = "pending"
+    LEASE_LOST = "lease_lost"
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingJobResult:
+    """DDM/VLM 训练执行器返回给 job owner 的窄结果事实。"""
+
+    outcome: TrainingJobOutcome
+    failure_code: str | None = None
+
+
+class TrainingJobFinisher(Protocol):
+    """job owner 在 dataset 的发布事务内核对租约并写通用终态。"""
+
+    def __call__(self, session: object, result: TrainingJobResult) -> bool: ...
+
+
+class TrainingJobExecutor(Protocol):
+    """供 `job` worker 调用的 DDM/VLM 训练命令执行 seam。"""
+
+    def execute_job(
+        self,
+        *,
+        command_id: UUID,
+        now: datetime,
+        resolve_current_caller: CurrentCallerResolver,
+        finish_job: TrainingJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
+    ) -> TrainingJobResult:
+        """推进一条 DDM 训练命令；完成/失败时才返回终态，否则返回进行中。"""
+        ...
+
+
 __all__ = [
     "AnnotationBackend",
     "AnnotationBackendExecutionError",
@@ -355,6 +410,7 @@ __all__ = [
     "ArtifactJobFinisher",
     "ArtifactTransactionCommitter",
     "CheckedDatasetInput",
+    "ConsumedDdmFile",
     "DatasetAnnotationRuntime",
     "DatasetArtifactExecutor",
     "DatasetCheckedInputReader",
@@ -363,12 +419,21 @@ __all__ = [
     "DatasetResourceLookup",
     "DatasetUsageRuntime",
     "DatasetValidationRuntime",
+    "DdmInputConsumption",
+    "DdmInputSelection",
     "DdmReader",
+    "FrozenDdmInput",
+    "FrozenDdmInputSet",
+    "FrozenDdmMemberInput",
+    "MaterializedDdmInput",
     "MediaProbeUnavailableError",
     "MemberStatus",
     "ObjectStorageUnavailableError",
     "PreparedAnnotationCopy",
     "PublishedDatasetArtifact",
+    "TrainingJobExecutor",
+    "TrainingJobOutcome",
+    "TrainingJobResult",
     "UsageCheckStatus",
     "UsageCheckTarget",
     "UsageKind",
@@ -388,6 +453,8 @@ __all__ = [
     "fail_annotation_context_preparation",
     "fail_annotation_execution",
     "fail_usage_check",
+    "freeze_ddm_input",
+    "materialize_ddm_input",
     "prepare_annotation_context_copy",
     "prepare_annotation_execution_copy",
     "record_annotation_context_cleanup_candidate",
@@ -397,4 +464,5 @@ __all__ = [
     "save_annotation_execution_copy",
     "summary",
     "validate_video_upload",
+    "verify_ddm_input_consumption",
 ]

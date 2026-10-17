@@ -12,10 +12,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,9 +32,15 @@ from factory_sop.dataset.model import (
     AnnotationSegment,
     AnnotationSubmission,
     ArtifactStatus,
+    AugmentationCommand,
+    AugmentationStatus,
     DatasetArtifact,
     DatasetMember,
+    TrainingCommand,
+    TrainingCommandStatus,
     TrainingDataset,
+    TrainingResultStatus,
+    TrainingService,
     UploadAttempt,
     UsageCheck,
     UsageCheckStatus,
@@ -703,4 +711,259 @@ class DatasetArtifactRow(Table):
             created_by=value.created_by,
             created_at=value.created_at,
             updated_at=value.updated_at,
+        )
+
+
+class TrainingCommandRow(Table):
+    """已受理的训练应用命令及其冻结负载与派发事实。"""
+
+    __tablename__ = "dataset_training_command"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "service", "idempotency_key"),
+        UniqueConstraint("job_id"),
+        # 每个服务的每个逻辑基座目标最多一条在途命令：仅 result_unknown/bound 持有保护。
+        Index(
+            "uq_dataset_training_command_service_backend_target_inflight",
+            "service",
+            "backend_target",
+            unique=True,
+            postgresql_where=text("status IN ('result_unknown', 'bound')"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    dataset_id: Mapped[UUID] = mapped_column(
+        Uuid(), ForeignKey("dataset_training_dataset.id", ondelete="CASCADE"), index=True
+    )
+    service: Mapped[str] = mapped_column(String(16), index=True)
+    status: Mapped[str] = mapped_column(String(32))
+    idempotency_key: Mapped[str] = mapped_column(String(255))
+    request_digest: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    job_id: Mapped[UUID | None] = mapped_column(Uuid())
+    backend_target: Mapped[str | None] = mapped_column(String(255))
+    base_job_id: Mapped[str | None] = mapped_column(String(255))
+    baseline_job_ids: Mapped[list[str] | None] = mapped_column(JSONB())
+    dispatch_facts: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
+    base_observation: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    failure_detail: Mapped[str | None] = mapped_column(String(1024))
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    observation_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    observation_failure_code: Mapped[str | None] = mapped_column(String(64))
+    observation_failure_detail: Mapped[str | None] = mapped_column(String(1024))
+    result_status: Mapped[str] = mapped_column(String(32), default="not_registered")
+    result_generation: Mapped[int] = mapped_column(Integer(), default=0)
+    result_config_object_key: Mapped[str | None] = mapped_column(String(512))
+    result_config_sha256: Mapped[str | None] = mapped_column(String(64))
+    result_config_size: Mapped[int | None] = mapped_column(BigInteger())
+    result_checkpoint_object_key: Mapped[str | None] = mapped_column(String(512))
+    result_checkpoint_sha256: Mapped[str | None] = mapped_column(String(64))
+    result_checkpoint_size: Mapped[int | None] = mapped_column(BigInteger())
+    result_failure_code: Mapped[str | None] = mapped_column(String(64))
+    result_failure_detail: Mapped[str | None] = mapped_column(String(1024))
+    result_registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cancelled_by: Mapped[UUID | None] = mapped_column(Uuid())
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_by: Mapped[UUID | None] = mapped_column(Uuid())
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
+    cancel_detail: Mapped[str | None] = mapped_column(String(512))
+
+    def to_domain(self) -> TrainingCommand:
+        return TrainingCommand(
+            id=self.id,
+            dataset_id=self.dataset_id,
+            service=TrainingService(self.service),
+            status=TrainingCommandStatus(self.status),
+            idempotency_key=self.idempotency_key,
+            request_digest=self.request_digest,
+            payload=dict(self.payload),
+            job_id=self.job_id,
+            created_by=self.created_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            backend_target=self.backend_target,
+            base_job_id=self.base_job_id,
+            baseline_job_ids=tuple(self.baseline_job_ids or ()),
+            dispatch_facts=self.dispatch_facts,
+            base_observation=self.base_observation,
+            failure_code=self.failure_code,
+            failure_detail=self.failure_detail,
+            cancelled_by=self.cancelled_by,
+            cancelled_at=self.cancelled_at,
+            cancel_requested_by=self.cancel_requested_by,
+            cancel_requested_at=self.cancel_requested_at,
+            cancel_response=dict(self.cancel_response)
+            if self.cancel_response is not None
+            else None,
+            cancel_detail=self.cancel_detail,
+            last_observed_at=self.last_observed_at,
+            observation_failure_code=self.observation_failure_code,
+            observation_failure_detail=self.observation_failure_detail,
+            result_status=TrainingResultStatus(self.result_status),
+            result_generation=self.result_generation,
+            result_config_object_key=self.result_config_object_key,
+            result_config_sha256=self.result_config_sha256,
+            result_config_size=self.result_config_size,
+            result_checkpoint_object_key=self.result_checkpoint_object_key,
+            result_checkpoint_sha256=self.result_checkpoint_sha256,
+            result_checkpoint_size=self.result_checkpoint_size,
+            result_failure_code=self.result_failure_code,
+            result_failure_detail=self.result_failure_detail,
+            result_registered_at=self.result_registered_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: TrainingCommand) -> TrainingCommandRow:
+        return cls(
+            id=value.id,
+            dataset_id=value.dataset_id,
+            service=value.service.value,
+            status=value.status.value,
+            idempotency_key=value.idempotency_key,
+            request_digest=value.request_digest,
+            payload=dict(value.payload),
+            job_id=value.job_id,
+            backend_target=value.backend_target,
+            base_job_id=value.base_job_id,
+            baseline_job_ids=list(value.baseline_job_ids),
+            dispatch_facts=dict(value.dispatch_facts) if value.dispatch_facts is not None else None,
+            base_observation=dict(value.base_observation)
+            if value.base_observation is not None
+            else None,
+            failure_code=value.failure_code,
+            failure_detail=value.failure_detail,
+            last_observed_at=value.last_observed_at,
+            observation_failure_code=value.observation_failure_code,
+            observation_failure_detail=value.observation_failure_detail,
+            result_status=value.result_status.value,
+            result_generation=value.result_generation,
+            result_config_object_key=value.result_config_object_key,
+            result_config_sha256=value.result_config_sha256,
+            result_config_size=value.result_config_size,
+            result_checkpoint_object_key=value.result_checkpoint_object_key,
+            result_checkpoint_sha256=value.result_checkpoint_sha256,
+            result_checkpoint_size=value.result_checkpoint_size,
+            result_failure_code=value.result_failure_code,
+            result_failure_detail=value.result_failure_detail,
+            result_registered_at=value.result_registered_at,
+            created_by=value.created_by,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+            cancelled_by=value.cancelled_by,
+            cancelled_at=value.cancelled_at,
+            cancel_requested_by=value.cancel_requested_by,
+            cancel_requested_at=value.cancel_requested_at,
+            cancel_response=dict(value.cancel_response)
+            if value.cancel_response is not None
+            else None,
+            cancel_detail=value.cancel_detail,
+        )
+
+
+class AugmentationCommandRow(Table):
+    """增强首次输入与独立登记事实；在途唯一性由 PG 而非 worker 生命周期维护。"""
+
+    __tablename__ = "dataset_augmentation_command"
+    __table_args__ = (
+        Index("ix_dataset_augmentation_command_dataset_id", "dataset_id"),
+        UniqueConstraint("dataset_id", "idempotency_key", name="uq_augmentation_request"),
+        UniqueConstraint("backend_target", "base_augmentation_id", name="uq_augmentation_base"),
+        Index(
+            "uq_augmentation_inflight",
+            "backend_target",
+            "label_data_id",
+            unique=True,
+            postgresql_where=text("status IN ('result_unknown', 'bound')"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    dataset_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dataset_training_dataset.id", ondelete="CASCADE")
+    )
+    annotation_execution_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dataset_annotation_execution.id")
+    )
+    label_data_id: Mapped[str] = mapped_column(String(255))
+    idempotency_key: Mapped[str] = mapped_column(String(255))
+    frame_drop_iterations: Mapped[int] = mapped_column(Integer())
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32))
+    job_id: Mapped[UUID | None] = mapped_column(Uuid())
+    version: Mapped[int] = mapped_column(Integer())
+    backend_target: Mapped[str | None] = mapped_column(String(2048))
+    base_augmentation_id: Mapped[str | None] = mapped_column(String(255))
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    base_observation: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_code: Mapped[str | None] = mapped_column(String(255))
+    result_status: Mapped[str] = mapped_column(String(32))
+    result_manifest: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    result_failure_code: Mapped[str | None] = mapped_column(String(255))
+    cancelled_by: Mapped[UUID | None] = mapped_column(Uuid())
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> AugmentationCommand:
+        return AugmentationCommand(
+            id=self.id,
+            dataset_id=self.dataset_id,
+            annotation_execution_id=self.annotation_execution_id,
+            label_data_id=self.label_data_id,
+            idempotency_key=self.idempotency_key,
+            frame_drop_iterations=self.frame_drop_iterations,
+            input_snapshot=self.input_snapshot,
+            created_by=self.created_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            status=AugmentationStatus(self.status),
+            job_id=self.job_id,
+            version=self.version,
+            backend_target=self.backend_target,
+            base_augmentation_id=self.base_augmentation_id,
+            dispatched_at=self.dispatched_at,
+            base_observation=self.base_observation,
+            last_observed_at=self.last_observed_at,
+            failure_code=self.failure_code,
+            result_status=self.result_status,
+            result_manifest=self.result_manifest,
+            result_failure_code=self.result_failure_code,
+            cancelled_by=self.cancelled_by,
+            cancelled_at=self.cancelled_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: AugmentationCommand) -> AugmentationCommandRow:
+        return cls(
+            id=value.id,
+            dataset_id=value.dataset_id,
+            annotation_execution_id=value.annotation_execution_id,
+            label_data_id=value.label_data_id,
+            idempotency_key=value.idempotency_key,
+            frame_drop_iterations=value.frame_drop_iterations,
+            input_snapshot=dict(value.input_snapshot),
+            created_by=value.created_by,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+            status=value.status.value,
+            job_id=value.job_id,
+            version=value.version,
+            backend_target=value.backend_target,
+            base_augmentation_id=value.base_augmentation_id,
+            dispatched_at=value.dispatched_at,
+            base_observation=dict(value.base_observation),
+            last_observed_at=value.last_observed_at,
+            failure_code=value.failure_code,
+            result_status=value.result_status,
+            result_manifest=dict(value.result_manifest),
+            result_failure_code=value.result_failure_code,
+            cancelled_by=value.cancelled_by,
+            cancelled_at=value.cancelled_at,
         )

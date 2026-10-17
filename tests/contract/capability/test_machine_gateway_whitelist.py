@@ -41,17 +41,33 @@ class MachineGatewayWhitelistTest(unittest.TestCase):
     def test_rule_opens_edge_reporting_and_keeps_browser_routes_out(self) -> None:
         rule = _machine_whitelist_rule(CONFIGS[0])
         for uri in (
+            "/api/v1/device-commands/compression/next",
+            "/api/v1/device-commands/compression/00000000-0000-0000-0000-000000000001/result",
             "/api/v1/monitor/reported-decisions",
             "/api/v1/monitor/reported-decisions/enveloped",
             "/api/v1/monitor/reported-disposals",
+            "/api/v1/retention/reported-impact/access-check",
+            # #206 的三个主机签名删除资格动作：claim / verify / result 都只经这一条白名单。
+            "/api/v1/retention/evidence-deletion-claims",
+            "/api/v1/retention/evidence-deletion-claims/verify",
+            "/api/v1/retention/evidence-deletion-claims/result",
         ):
             self.assertIsNotNone(re.search(rule, uri), uri)
         for uri in (
+            "/api/v1/device-commands/compression/next/extra",
+            "/api/v1/device-commands/compression/arbitrary/result",
+            "/api/v1/inference-hosts/00000000-0000-0000-0000-000000000001/recording-compression/commands",
             "/api/v1/monitor/decisions",
+            "/api/v1/retention/policy",
+            "/api/v1/retention/policy/impact-estimate",
+            "/api/v1/retention/reported-impact/access-check/extra",
             "/api/v1/monitor/violations",
             "/api/v1/monitor/reported-decisions/arbitrary-extra",
             "/api/v1/monitor/reported-decisions/enveloped/extra",
             "/api/v1/monitor/reported-disposals/extra",
+            # 浏览器会用的证据/保留路由不能被这条机器白名单放宽。
+            "/api/v1/retention/evidence-deletion-claims/arbitrary-extra",
+            "/api/v1/retention/evidence-deletion-claims/verify/extra",
         ):
             self.assertIsNone(re.search(rule, uri), uri)
 

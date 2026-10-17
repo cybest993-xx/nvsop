@@ -14,12 +14,13 @@
 | `generated_at` | 信封生成时刻；诊断元数据，不参与稳定内容或运行语义身份，也不用于同 revision 的先后裁决 |
 | `sha256` | 完整 wire 信封的 canonical SHA-256，保护传输/持久化完整性 |
 | `effective_sha256` | 运行语义身份；排除 `config_revision`、`generated_at`、非行为 `producer` 与主机执行权租约 `execution_grants`，包含会改变 Edge 行为的配置与 capability requirement |
-| `station.revision` | `device` 拥有的工位配置修订，不替代 bundle assignment revision |
+| `station.revision` | `device` 拥有的工位配置修订，不替代 bundle assignment revision；Center 组合时把该工位其他 owner 的工位级修订（模板版本、保留覆盖记录版本）并入其中，使这些变更同样产生新 assignment |
 | 模板 `version_id` / `version_sha256` | `template` 拥有的不可变模板版本身份；artifact 各自保留内容 SHA-256 |
 | `model_ids` | Center 签发 bundle 时冻结的推理后端模型事实；历史判定继续使用事件时冻结的 provenance，不用当前配置回填 |
 | `producer` | 已知、可选、非行为诊断元数据；不进入 stable/effective identity |
 | `execution_grants` | 主机自己的当前工位物理执行权租约事实（`station_id`/`grant_id`/`holder_host_id`/`lease_expires_at`）；Center 在每次成功拉取配置时于同一请求内只续期该主机持有的租约。host-scoped 授权元数据：不进入 stable/effective identity，也不进入配置运行时的组合与切换；Edge 按声明的 `execution.lease-write-gate` 能力把它用作物理写入门禁，到期/缺失即拒绝写入 |
 | `required_capabilities` | 行为兼容门禁；排序且去重。Edge 不支持任一声明时显式拒绝整个候选 |
+| `stations[].retention` | 中心按工位解析后的完整生效保留组（§5.19）；行为兼容门禁为 `retention.station-policy-v1`。字段缺失表示中心尚未下发保留行为，不是默认值，Edge 不据此猜算保留期 |
 
 历史 assignment 不再发明第二个 identity。Center 的 issued-configuration 历史以 host + `config_revision` + `effective_sha256` 固定一次签发，并冻结 station/backend、模板版本/摘要和 model facts；历史上报必须指向这份实际签发事实。
 
@@ -35,6 +36,13 @@
 `disposition_policy=stop` 同样属于第 2 类行为扩展。共享 wire 仍把 `disposition_policy` 保持为既有的非空字符串，避免通过收窄字段制造隐式破坏；Center 的产品/绑定层只允许首版 `record` / `stop`。只要任一工位实际生效值为 `stop`，Center 就必须同时声明 `disposition.stop-output-v1`。新 Edge 只有在该 capability 存在、策略值受支持且确认拓扑能唯一解析 `停线联锁` 输出点时才激活物理处置；缺 capability 的旧 Center `stop` 候选也必须拒绝，防止升级后的 Edge 把历史自由文本从“记录类处置”静默重解释为物理停线。旧 Edge 不认识该 capability 时则在候选阶段拒绝整个新配置。`record` 不要求这一 capability。
 
 点位型声光动作也按第 2 类行为扩展发布。Center 只有在实际主机切片包含名为 `声光告警` 的输出点时才声明 `disposition.sound-light-output-v1`；新 Edge 只在 capability 存在且确认拓扑能唯一解析该输出点时生成声光处置，并继续复用统一输出写入门禁与本地处置账本。没有 capability 的历史 bundle 即使碰巧存在同名自由文本点位也保持原行为，不允许升级后的 Edge 静默把旧配置解释成新的物理动作；旧 Edge 不认识新 capability 时显式拒绝候选。
+
+工位生效保留组同样按第 2 类行为扩展发布。Center 把按工位解析后的完整保留组放进 `stations[].retention`，并在
+bundle 中声明 `retention.station-policy-v1`；不支持该能力的旧 Edge 显式拒绝整个候选，而不是忽略字段或自行把
+全局默认值与工位覆盖组合并。该字段在当前 wire 里是**可选**的：引入它之前写下的当前确认 payload 没有它，
+Edge 读到缺失时不猜默认值、也不产生保留行为，只在下一次成功拉取到带能力的候选后才消费生效组；反过来，
+一旦候选声明了该能力，每个站都必须携带已解析组，否则 Edge 拒绝整个候选。发布顺序因此是 Center-first：
+先部署会下发该字段的 Center，再升级消费它的 Edge。
 
 配置契约不提供 `extensions`、任意 JSON bag、插件字典或“未知字段照单全收”。核心字段仍严格必填，未知字段仍拒绝。
 
@@ -70,6 +78,9 @@
 | Execution-authority report | `ReportedExecutionAuthority` 严格 `EXECUTION_AUTHORITY_REPORT_CONTRACT_VERSION=1`，只镜像 Edge 本机写入门禁当前状态 | 新 Edge 向 `/monitor/execution-authority` 上报；旧 Center 返回 404 时 Edge 仅在本进程停用该 advisory 展示上报，不重试制造噪声，也绝不改变本地租约/写入门禁/判定。兼容 Center 未取得 Edge 状态时 Web 保守显示未知/过期而不是可写；归 monitor/reporting owner |
 | Delegated connection-test command | 无数字 generation；以严格 `command_type` + 固定字段解析，未知字段拒绝 | 当前单一 shape；需要新命令行为时新增显式 command type/协商，不把任意字段塞入现有 payload，归 delegated-command owner |
 | Delegated reclip command | 无数字 generation；严格 `command_type=reclip_evidence` + 固定字段（`command_id`/`request_id`/`station_id`/`instance_id`/`anchor`/`window_start`/`window_end`/`available_until`），未知字段拒绝；成功回报严格 `{evidence_id}`，失败回报 `{evidence_id: null, failure_code, detail}` | S038 新增、S039 接入生产；载荷由 evidence 请求与原始证据事实派生，领取走 device 队列的类型收窄，默认 `/device-commands/next` 不领取，专用主机签名端点由生产 `create_app` 挂载。`available_until` 是中心按原登记冻结 `wall_offset` 与来源机 `recording_window_seconds` 算出的权威截止（epoch 秒），来源机不得用本机当前配置猜归档截止；来源机在产出任何产物前已过截止才报 `archive_expired`，已定稿产物优先复用。成功回报要求结果引用与原证据的工位/实例/主机/锚点及本请求的并集窗口精确匹配，否则拒绝并回滚命令结案；终局失败（过期/素材缺失/切片错误/已定稿媒体损坏）由来源机回报并冻结同一原因，请求与命令在同一事务内结案。S038 的专用端点从未在生产挂载且无 Edge 运行循环消费该命令，故新增必填 `available_until` 按 Center-first 匹配发布；归 delegated-command/evidence owner |
+| Delegated execution-handover command | 无数字 generation；严格 `command_type=stop_execution_handover` + 固定字段（`command_id`/`handover_id`/`station_id`/`from_host_id`/`to_host_id`/`grant_id`），未知字段拒绝；领取信封严格 `{command, claim_token, lease_expires_at}`；回报严格 `{handover_id, grant_id, outcome, detail, failure_code}`，confirmed 不得携带失败原因，failed 必须携带原因 | #214 新增并接入生产；载荷由 execution 冻结的正常交权请求派生，领取只走专用主机签名端点 `/device-commands/execution-handover/next`，默认 `/device-commands/next` 不领取；回报在同一请求事务内复核冻结请求/当前租约并结案命令与请求，陈旧确认只结案命令不改后继请求；归 execution/delegated-command owner |
+| Delegated recording-compression command | 严格 `command_type=control_recording_compression`，固定 `command_id` / `action`（inspect、pause、resume、abort）/ `claim_token` / epoch 秒 `lease_expires_at`；回报固定实际状态、请求意图、分段、PID、本机读取速率及失败信息 | S049 复用 `device_pending_command`，专用主机签名端点 `/device-commands/compression/next` 与 `/{command_id}/result`；旧 Edge 默认领取端点不领取新类型。Center-first 协同部署：先部署新增队列字段与端点的 Center，再启用新 Edge 的控制轮询。旧 Center 无此端点时 Web 控制不可用，本机原压缩仍自治运行。未知字段拒绝，同主机控制命令串行领取，结果绑定主机、令牌与租约，观测仅作为带时间的快照；租约只由中心判定，中心 4xx 表示该次领取或观测已不适用（Edge 交回队列重新领取），5xx 保留同一观测重试，本机不复算过期。控制入队按编辑权限声明并执行，inspect 也不例外；归 delegated-command / 本机录像压缩 owner |
+| Evidence deletion eligibility | 无数字 generation；三个严格固定字段动作：claim `{host_id, config_revision, effective_sha256, candidates[]}`、verify `{host_id, ticket, config_revision, effective_sha256, evidence_id, generation, sha256, size, reference}`、result `{host_id, claim_id, evidence_id, outcome, reason_code, detail}`；未知字段、重复候选与越界批次拒绝 | S043（#206）新增并接入生产；由 `retention` 拥有逐证据判定与不透明 HMAC 短票据，`evidence` 拥有删除认领、在审复核与播放占用事实，事实只经 owner seam 读取。claim 与 verify 都要求来源机提交的配置身份等于中心当前分配；票据只指向一条持久认领，未结案认领按证据唯一并继续保护，票据过期不释放认领，只有 result 终局反馈才结案。Center-first：新 Edge 消费该契约时，旧 Center 缺少端点则整体跳过并保留本机媒体、待办与“未知”原因，不使用旧 bool 或本地猜算放行；归 retention/evidence owner |
 
 **判定投递信封**：`ReportedDecision` 严格 v1/v2 格式不变。`/monitor/reported-decisions/enveloped` 接收被同一主机身份签名覆盖的 `decision`、`latched_at` 与 `realtime`；后两者属于投递/归档元数据，不进入不可变的判定 payload。新 Edge 在旧 Center 的该入口返回 404 时退回原 v2 归档路径（不保留“实时”资格）；旧 Edge/历史 SQLite 没有可证明的锁存时刻时也沿用原上报，仅归档。每个事件首次入库的元数据保留，后续重发不可覆盖。协议扩展不引入新判定版本或第二判定权威。
 

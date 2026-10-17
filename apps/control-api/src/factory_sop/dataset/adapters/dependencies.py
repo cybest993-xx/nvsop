@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, cast
 from uuid import UUID
@@ -10,24 +11,55 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session as DatabaseSession
 from sqlalchemy.orm import sessionmaker
 
+from factory_sop.auth.api import CurrentCallerResolver
 from factory_sop.dataset.adapters.annotation import HttpAnnotationBackend
 from factory_sop.dataset.adapters.annotation_volume import LocalAnnotationDataVolume
 from factory_sop.dataset.adapters.artifact_execution import PostgresDatasetArtifactExecutor
-from factory_sop.dataset.adapters.ddm import NvidiaDdmAnnotationGenerator, NvidiaDdmReader
+from factory_sop.dataset.adapters.augmentation_execution import PostgresAugmentationExecutor
+from factory_sop.dataset.adapters.ddm import (
+    LocalDdmResultVolume,
+    NvidiaDdmAnnotationGenerator,
+    NvidiaDdmReader,
+    load_ddm_reader_parameters,
+)
+from factory_sop.dataset.adapters.ddm_execution import (
+    DdmTrainingServiceAdapter,
+    HttpDdmTrainingBackend,
+)
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
-from factory_sop.dataset.adapters.vlm import NvidiaVlmReader
-from factory_sop.dataset.annotation import AnnotationBackend
+from factory_sop.dataset.adapters.training_execution import PostgresTrainingCommandExecutor
+from factory_sop.dataset.adapters.vlm import (
+    LocalVlmResultVolume,
+    NvidiaVlmJsonDiscovery,
+    NvidiaVlmReader,
+)
+from factory_sop.dataset.adapters.vlm_execution import (
+    HttpVlmTrainingBackend,
+    VlmTrainingServiceAdapter,
+)
+from factory_sop.dataset.annotation import AnnotationBackend, AnnotationDataVolume
 from factory_sop.dataset.api import (
+    ArtifactTransactionCommitter,
     DatasetAnnotationRuntime,
     DatasetArtifactExecutor,
+    DatasetCommandExecutor,
     DatasetResourceLookup,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
+    TrainingJobExecutor,
+    TrainingJobFinisher,
+    TrainingJobOutcome,
+    TrainingJobResult,
 )
 from factory_sop.dataset.media import MediaProbe
-from factory_sop.dataset.repository import DatasetRepository, UsageDatasetRepository
+from factory_sop.dataset.repository import (
+    AugmentationRepository,
+    DatasetRepository,
+    TrainingCommandRepository,
+    UsageDatasetRepository,
+)
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.job.api import AnnotationJobQueue, UsageJobQueue, ValidationJobQueue
 from factory_sop.persistence import RequestSession
@@ -42,8 +74,13 @@ def datasets(session: RequestSession) -> DatasetRepository:
 class _DatasetResourceLookup:
     """用数据集仓储确认任务资源仍然有效。"""
 
-    def __init__(self, datasets: UsageDatasetRepository) -> None:
+    def __init__(
+        self,
+        datasets: TrainingCommandRepository,
+        augmentations: AugmentationRepository | None = None,
+    ) -> None:
         self._datasets = datasets
+        self._augmentations = augmentations
 
     def resource_exists(self, member_id: UUID, attempt_id: UUID) -> bool:
         """确认成员与上传尝试或标注执行代次归属一致。"""
@@ -56,21 +93,25 @@ class _DatasetResourceLookup:
         ) or self._datasets.annotation_execution_exists(member_id, attempt_id)
 
     def dataset_resource_exists(self, dataset_id: UUID, resource_id: UUID) -> bool:
-        """确认用途检查或制品属于数据集。"""
+        """确认用途检查、制品或 DDM 训练命令属于数据集。"""
         for value in (
             self._datasets.usage_check_by_id(resource_id),
             self._datasets.artifact_by_id(resource_id),
+            self._datasets.training_command_by_id(resource_id),
         ):
             if value is not None and value.dataset_id == dataset_id:
                 return True
-        return False
+        augmentation = (
+            self._augmentations.augmentation_by_id(resource_id) if self._augmentations else None
+        )
+        return augmentation is not None and augmentation.dataset_id == dataset_id
 
 
 def dataset_resource(
-    datasets: Annotated[UsageDatasetRepository, Depends(datasets)],
+    datasets: Annotated[TrainingCommandRepository, Depends(datasets)],
 ) -> DatasetResourceLookup:
     """提供 job 查询任务资源归属所需的最小数据集契约。"""
-    return _DatasetResourceLookup(datasets)
+    return _DatasetResourceLookup(datasets, cast(AugmentationRepository, datasets))
 
 
 def storage(request: Request) -> ObjectStorage:
@@ -211,6 +252,120 @@ def artifact_executor(
         generate=lambda workspace, output_filename: NvidiaDdmAnnotationGenerator().generate(
             workspace,
             output_filename,
+        ),
+    )
+
+
+class _UnconfiguredTrainingExecutor:
+    """未配置对应训练基座时的占位执行器：绝不静默开始训练。"""
+
+    def __init__(self, service_label: str) -> None:
+        self._service_label = service_label
+
+    def execute_job(
+        self,
+        *,
+        command_id: UUID,
+        now: datetime,
+        resolve_current_caller: CurrentCallerResolver,
+        finish_job: TrainingJobFinisher,
+        commit_transaction: ArtifactTransactionCommitter,
+    ) -> TrainingJobResult:
+        return TrainingJobResult(TrainingJobOutcome.PENDING, f"{self._service_label}_UNCONFIGURED")
+
+
+def ddm_executor(
+    settings: Settings,
+    factory: sessionmaker[DatabaseSession],
+) -> TrainingJobExecutor:
+    """构造 DDM 训练命令执行器；未配置时返回不开始训练的占位实现。
+
+    配置但服务不可达一律由执行器记诊断，不影响登录、模板、设备与控制面启动。
+    """
+    if settings.ddm_training_backend_url is None or settings.ddm_training_config_path is None:
+        return _UnconfiguredTrainingExecutor("DDM")
+    config_path = Path(settings.ddm_training_config_path)
+    assert settings.ddm_training_dataset_root is not None
+    assert settings.ddm_training_results_root is not None
+    dataset_root = Path(settings.ddm_training_dataset_root)
+    return PostgresTrainingCommandExecutor(
+        factory=factory,
+        storage_factory=lambda: LocalFileObjectStorage.from_settings(settings),
+        adapter=DdmTrainingServiceAdapter(
+            backend=HttpDdmTrainingBackend(
+                base_url=settings.ddm_training_backend_url,
+                timeout_seconds=settings.ddm_training_http_timeout_seconds,
+            ),
+            backend_target=settings.ddm_training_backend_url,
+            dataset_root=dataset_root,
+            training_consumer_parameters={},
+            validation_consumer_parameters={},
+            generate=NvidiaDdmAnnotationGenerator().generate,
+            reader_parameters=lambda: load_ddm_reader_parameters(config_path),
+            result_volume=LocalDdmResultVolume(
+                results_root=Path(settings.ddm_training_results_root),
+                dataset_root=dataset_root,
+            ),
+        ),
+    )
+
+
+def vlm_executor(
+    settings: Settings,
+    factory: sessionmaker[DatabaseSession],
+) -> TrainingJobExecutor:
+    """构造 VLM 训练命令执行器；未配置时返回不开始训练的占位实现。
+
+    VLM 微调是可选能力：未配置时命令只保留 outbox 事实，不阻止其他产品交付。
+    """
+    if settings.vlm_training_backend_url is None:
+        return _UnconfiguredTrainingExecutor("VLM")
+    assert settings.vlm_training_dataset_root is not None
+    assert settings.vlm_training_results_root is not None
+    dataset_root = Path(settings.vlm_training_dataset_root)
+
+    def annotation_volume() -> AnnotationDataVolume | None:
+        # 整段视频候选不需要标注卷；只有标注切片会用到它，且缺失时材料化会给出
+        # 可诊断的拒绝而不是把未处理的异常抛到 worker。
+        if settings.annotation_data_root is None:
+            return None
+        return LocalAnnotationDataVolume(Path(settings.annotation_data_root))
+
+    return PostgresTrainingCommandExecutor(
+        factory=factory,
+        storage_factory=lambda: LocalFileObjectStorage.from_settings(settings),
+        adapter=VlmTrainingServiceAdapter(
+            backend=HttpVlmTrainingBackend(
+                base_url=settings.vlm_training_backend_url,
+                timeout_seconds=settings.vlm_training_http_timeout_seconds,
+            ),
+            backend_target=settings.vlm_training_backend_url,
+            dataset_root=dataset_root,
+            annotation_volume=annotation_volume,
+            result_volume=LocalVlmResultVolume(
+                results_root=Path(settings.vlm_training_results_root),
+                dataset_root=dataset_root,
+            ),
+            discovery=NvidiaVlmJsonDiscovery(),
+        ),
+    )
+
+
+def augmentation_executor(
+    settings: Settings, factory: sessionmaker[DatabaseSession]
+) -> DatasetCommandExecutor | None:
+    """只在部署已绑定 URL 和共享卷时装配增强；未配置不影响现有 worker。"""
+    if settings.augmentation_backend_url is None:
+        return None
+    assert settings.augmentation_data_root is not None
+    return PostgresAugmentationExecutor(
+        factory=factory,
+        backend_url=settings.augmentation_backend_url,
+        timeout_seconds=settings.augmentation_http_timeout_seconds,
+        volume_root=Path(settings.augmentation_data_root),
+        storage_factory=lambda: LocalFileObjectStorage.from_settings(settings),
+        media_probe=FfprobeMediaProbe(
+            binary=settings.media_probe_binary, timeout_seconds=settings.media_probe_timeout_seconds
         ),
     )
 

@@ -8,6 +8,7 @@ typed 元数据先在临时目录写完再整体原子 rename, 之后才写 SQLi
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -15,7 +16,8 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
@@ -32,9 +34,14 @@ from edge_runtime.configuration_values import (
 )
 from edge_runtime.judgment.model import HostInstant
 from edge_runtime.local_state import LocalState, PendingEvidence, StationStore
+from edge_runtime.recording_provenance import (
+    MATERIAL_GENERATION_COMPRESSED as MATERIAL_GENERATION_COMPRESSED,
+)
+from edge_runtime.recording_provenance import (
+    read_compression_provenance,
+)
 
 MATERIAL_GENERATION_ORIGINAL = "original"
-MATERIAL_GENERATION_COMPRESSED = "compressed"
 MATERIAL_GENERATION_MIXED = "mixed"
 _KNOWN_MATERIAL_GENERATIONS = frozenset(
     {MATERIAL_GENERATION_ORIGINAL, MATERIAL_GENERATION_COMPRESSED}
@@ -93,6 +100,35 @@ def load_evidence_media_configuration(value: object) -> EvidenceMediaConfigurati
     )
 
 
+def ensure_storage_separation(
+    *,
+    recording_directory: Path,
+    evidence_directory: Path | None,
+    local_state_path: Path | None = None,
+) -> None:
+    """拒绝滚动录像目录与证据目录/SQLite 路径重叠(含 symlink 别名)。
+
+    这是唯一的目录安全 owner 校验: 根的配置加载在写入者启动前调用它, 切片在落盘前再检查
+    一次。``evidence_directory`` 可省略, 因为当前合法配置允许只启用媒体; 此时仍拒绝录像
+    目录包含权威 SQLite。滚动录像由 MediaMTX 正常窗口回收, 不允许清理到证据目录或 SQLite。
+    """
+    recording = recording_directory.resolve()
+    if evidence_directory is not None:
+        evidence = evidence_directory.resolve()
+        if recording == evidence or recording in evidence.parents or evidence in recording.parents:
+            raise ValueError(
+                "recording_directory and evidence_directory must be disjoint "
+                f"(recording={recording}, evidence={evidence})"
+            )
+    if local_state_path is not None:
+        state = local_state_path.resolve()
+        if state == recording or recording in state.parents:
+            raise ValueError(
+                f"local_state_path must not be inside recording_directory "
+                f"(state={state}, recording={recording})"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class EvidenceClipSet:
     """一次定稿产物的覆盖窗口 (monotonic) 与每来源 typed 元数据 JSON。"""
@@ -133,6 +169,11 @@ def slice_evidence(
         raise EvidenceMediaError(
             "mapping_missing", "pending evidence has no frozen recording source mapping"
         )
+    # 在写入任何证据字节前再次确认存储分离; 配置加载与运行时目录不可信地变化时 fail-closed。
+    ensure_storage_separation(
+        recording_directory=recording_directory,
+        evidence_directory=configuration.evidence_directory,
+    )
     evidence_id = identity or _evidence_id(host_id, pending.queue_id)
     try:
         configuration.evidence_directory.mkdir(parents=True, exist_ok=True)
@@ -143,18 +184,26 @@ def slice_evidence(
         raise EvidenceMediaError("media_io_failed", str(error)) from error
     try:
         try:
-            media = [
-                _slice_source(
-                    source,
-                    pending=pending,
-                    configuration=configuration,
-                    recording_directory=recording_directory,
-                    ffmpeg_binary=ffmpeg_binary,
-                    work=work,
-                    wall_offset=wall_offset,
-                )
-                for source in pending.sources
-            ]
+            with ExitStack() as materials:
+                for source in sorted(pending.sources):
+                    directory = recording_directory / source
+                    if not directory.is_dir():
+                        raise EvidenceMediaError(
+                            "material_missing", f"recording directory absent for {source}"
+                        )
+                    materials.enter_context(recording_material_access(directory, exclusive=False))
+                media = [
+                    _slice_source(
+                        source,
+                        pending=pending,
+                        configuration=configuration,
+                        recording_directory=recording_directory,
+                        ffmpeg_binary=ffmpeg_binary,
+                        work=work,
+                        wall_offset=wall_offset,
+                    )
+                    for source in pending.sources
+                ]
         except OSError as error:
             raise EvidenceMediaError("media_io_failed", str(error)) from error
         covered_from = max(_number(item["actual_from"]) for item in media)
@@ -266,7 +315,7 @@ def _slice_source(
         raise EvidenceMediaError("material_missing", f"recording directory absent for {source}")
     selected = _select_segments(_list_segments(directory, configuration), wall_from, wall_to)
     actual_from, actual_to = selected[0].start, selected[-1].end
-    generations = [_segment_generation(segment.path) for segment in selected]
+    generations = [recording_segment_generation(segment.path) for segment in selected]
     clip = work / f"{source}.mp4"
     timeout = configuration.slice_timeout_seconds
     inputs = ["-f", "concat", "-safe", "0", "-i", str(_segment_list(work, selected))]
@@ -290,13 +339,53 @@ def _slice_source(
         "segment_generations": {
             generation: generations.count(generation) for generation in sorted(set(generations))
         },
-        "sha256": _digest(clip),
+        "sha256": file_sha256(clip),
         "size_bytes": clip.stat().st_size,
     }
 
 
-def _segment_generation(path: Path) -> str:
-    """读取单个分段的真实素材代次; 缺失 sidecar 按原始素材, 非法/未知声明即拒绝。"""
+@contextmanager
+def recording_material_access(directory: Path, *, exclusive: bool) -> Iterator[int]:
+    """切片共享占用相机目录 inode, 压缩/替换排他且不等待; 进程退出自动释放。
+
+    从探测/代次读取直到 ffmpeg 完成都持有共享锁, 避免 concat 尚未打开的分段被换代。
+    直接锁目录而不创建锁文件, 不改变 MediaMTX 分段发现或正常滚动窗口回收契约。
+    """
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        operation = fcntl.LOCK_EX | fcntl.LOCK_NB if exclusive else fcntl.LOCK_SH
+        fcntl.flock(descriptor, operation)
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def recording_segment_generation(path: Path) -> str:
+    """读取单个分段的真实素材代次; 缺失 sidecar 按原始素材, 非法/未知声明即拒绝。
+
+    证据切片与录像压缩共用这份生产者契约 (S038/§5.20): 压缩不再重编码已归档的
+    ``compressed`` 分段, 也无法证明代次的声明一律拒绝而不是静默当成原始素材。
+    """
+    provenance = path.with_suffix(".compressed.json")
+    if provenance.exists():
+        # S047 留痕先于分段 rename 持久化; 同一份留痕解释提交前后两种完整文件, 无半代次窗口。
+        try:
+            provenance_document = read_compression_provenance(provenance)
+            if (
+                provenance_document.source != path.name
+                or provenance_document.candidate != path.with_suffix(".compressed.mp4").name
+            ):
+                raise ValueError("compression identity mismatch")
+            digest = file_sha256(path)
+            if digest == provenance_document.candidate_sha256:
+                return MATERIAL_GENERATION_COMPRESSED
+            if digest == provenance_document.source_sha256:
+                return MATERIAL_GENERATION_ORIGINAL
+            raise ValueError("compression material changed")
+        except (OSError, ValueError) as error:
+            raise EvidenceMediaError(
+                "material_provenance_invalid", f"invalid compression material for {path.name}"
+            ) from error
     sidecar = path.with_suffix(_MATERIAL_SIDECAR_SUFFIX)
     if not sidecar.exists():
         return MATERIAL_GENERATION_ORIGINAL
@@ -337,7 +426,7 @@ def _segment_list(work: Path, segments: list[_Segment]) -> Path:
 def _list_segments(directory: Path, configuration: EvidenceMediaConfiguration) -> list[_Segment]:
     segments: list[_Segment] = []
     for path in sorted(directory.glob("*.mp4")):
-        start = _segment_start(path.name, configuration.recording_timezone)
+        start = recording_segment_start(path.name, configuration.recording_timezone)
         duration = (
             None
             if start is None
@@ -458,7 +547,12 @@ def _probe_duration(ffprobe_binary: Path, path: Path, timeout: float) -> float |
     return duration if has_video and duration > 0 else None
 
 
-def _segment_start(name: str, recording_timezone: str | None) -> float | None:
+def recording_segment_start(name: str, recording_timezone: str | None) -> float | None:
+    """按 MediaMTX 分段文件名解析录像墙钟起点 (epoch 秒); 不可解析返回 None。
+
+    证据切片与录像压缩共用这份时间解释 (§5.19/§5.20): 名称不符合录像生产者契约的分段
+    不参与任何按时间的选择, 第二个实现不得自行猜测分段命名。
+    """
     stem = name[:-4] if name.endswith(".mp4") else name
     try:
         parsed = datetime.strptime(stem, _SEGMENT_TIME_FORMAT)
@@ -485,7 +579,18 @@ def _artifact_name(evidence_id: str, covered_from: float, covered_to: float) -> 
     return f"{evidence_id}-{round(covered_from * 1000)}-{round(covered_to * 1000)}"
 
 
-def _digest(path: Path) -> str:
+def evidence_media_identity(host_id: str, queue_id: int) -> str:
+    """首次切片产物的稳定身份; 与切片/登记使用同一推导, 不 hash 浮点锚点新造身份。"""
+    return _evidence_id(host_id, queue_id)
+
+
+def evidence_artifact_directory(identity: str, covered_from: float, covered_to: float) -> str:
+    """已定稿产物目录名; 与切片写入使用同一命名, 删除方据此定位本机媒体。"""
+    return _artifact_name(identity, covered_from, covered_to)
+
+
+def file_sha256(path: Path) -> str:
+    """本机媒体文件内容摘要; 证据定稿与压缩候选校验共用同一算法。"""
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -562,7 +667,7 @@ def evidence_registration_payloads(
                 raise ValueError("evidence metadata contains an invalid filename")
             file_path = directory / artifact / name
             size = file_path.stat().st_size
-            digest = _digest(file_path)
+            digest = file_sha256(file_path)
             if kind == "clip" and (digest != item["sha256"] or size != item["size_bytes"]):
                 raise ValueError("evidence media does not match its finalized digest")
             reference = f"{artifact}/{name}"

@@ -36,6 +36,24 @@ SAFETY_OUTPUT_BUDGET_SECONDS = 0.5
 Center 在 bundle 中声明它, 要求 Edge 在该字段缺席或租约到期时拒绝物理写入; 不支持该能力的
 Edge 显式拒绝整个候选而不是忽略字段。Edge 侧由写入门禁实现声明支持。
 """
+RETENTION_STATION_POLICY_CAPABILITY = "retention.station-policy-v1"
+"""中心按工位下发已解析生效保留组所声明的行为兼容门禁。
+
+Center 在 bundle 中按工位携带中心解析后的完整生效保留组，因此声明本能力；不支持该能力的旧 Edge
+显式拒绝整个候选，而不是忽略字段或自行把默认值与覆盖组合并（machine-contract-evolution.md）。
+"""
+# 生效保留组是完整一组，因此没有 `unset`；`unset` 只表达“尚未设置”，由 Web 呈现语义，不进入 wire。
+RETENTION_RULE_MODES = frozenset({"duration", "permanent", "discard"})
+RETENTION_POLICY_FIELDS = (
+    "evidence_pass",
+    "evidence_fail",
+    "evidence_indeterminate",
+    "record_detail",
+    "record_compression_age",
+    "record_aggregate_age",
+    "disposal",
+    "local_reported",
+)
 _CONFIGURATION_ARTIFACT_ORDER = (
     "actions.json",
     "vlm_prompts.txt",
@@ -88,6 +106,77 @@ class ResolvedRuntimeParameters:
         deadline = _number(value["step_deadline_seconds"], "step_deadline_seconds")
         policy = _string(value["disposition_policy"], "disposition_policy")
         return cls(idle, deadline, policy)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRetentionRule:
+    """生效保留组中的一条规则：有界时长、永久或显式不保留。"""
+
+    mode: str
+    seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in RETENTION_RULE_MODES:
+            raise ValueError("retention rule mode is unsupported")
+        if self.mode == "duration":
+            if (
+                isinstance(self.seconds, bool)
+                or not isinstance(self.seconds, int)
+                or self.seconds <= 0
+            ):
+                raise ValueError("duration retention requires a positive number of seconds")
+        elif self.seconds is not None:
+            raise ValueError("only duration retention carries seconds")
+
+    def to_wire(self) -> dict[str, object]:
+        return {"mode": self.mode, "seconds": self.seconds}
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ResolvedRetentionRule:
+        _require_keys(value, {"mode", "seconds"}, "retention rule")
+        seconds = value["seconds"]
+        if seconds is not None and (isinstance(seconds, bool) or not isinstance(seconds, int)):
+            raise ValueError("retention rule seconds must be an integer or null")
+        return cls(mode=_string(value["mode"], "retention rule mode"), seconds=seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRetentionPolicy:
+    """中心解析后的完整生效保留组；整组替换，不逐字段混合默认值与工位覆盖组。"""
+
+    evidence_pass: ResolvedRetentionRule
+    evidence_fail: ResolvedRetentionRule
+    evidence_indeterminate: ResolvedRetentionRule
+    record_detail: ResolvedRetentionRule
+    record_compression_age: ResolvedRetentionRule
+    record_aggregate_age: ResolvedRetentionRule
+    disposal: ResolvedRetentionRule
+    local_reported: ResolvedRetentionRule
+
+    def __post_init__(self) -> None:
+        for name in ("evidence_fail", "evidence_indeterminate", "disposal", "local_reported"):
+            if getattr(self, name).mode == "discard":
+                raise ValueError(f"{name} must not be discard; discard is only for pass")
+        for name in ("record_detail", "record_compression_age", "record_aggregate_age"):
+            if getattr(self, name).mode != "duration":
+                raise ValueError(f"{name} must be a bounded duration")
+        detail = self.record_detail.seconds
+        compression = self.record_compression_age.seconds
+        if detail is None or compression is None or detail < compression:
+            raise ValueError("record detail retention must not be shorter than compression age")
+
+    def to_wire(self) -> dict[str, object]:
+        return {name: getattr(self, name).to_wire() for name in RETENTION_POLICY_FIELDS}
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> ResolvedRetentionPolicy:
+        _require_keys(value, set(RETENTION_POLICY_FIELDS), "retention policy")
+        return cls(
+            **{
+                name: ResolvedRetentionRule.from_wire(_object(value[name], "retention rule"))
+                for name in RETENTION_POLICY_FIELDS
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +473,9 @@ class ConfiguredStation:
     template: ConfigurationTemplate | None
     cameras: tuple[ConfiguredCamera, ...] = ()
     model_ids: tuple[str, ...] = ()
+    # 中心解析后的生效保留组。本字段引入之前的当前确认 payload 没有它，故缺失合法；缺失的语义是
+    # “中心尚未下发保留行为”，不是默认值。声明了 retention capability 的候选必须每个站都携带它。
+    retention: ResolvedRetentionPolicy | None = None
 
     def __post_init__(self) -> None:
         if not self.station_id or not self.backend_id or not self.code or not self.name:
@@ -405,7 +497,7 @@ class ConfiguredStation:
             raise ValueError("station model ids must not be empty")
 
     def to_wire(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "station_id": self.station_id,
             "backend_id": self.backend_id,
             "code": self.code,
@@ -418,6 +510,9 @@ class ConfiguredStation:
             "cameras": [camera.to_wire() for camera in self.cameras],
             "model_ids": list(self.model_ids),
         }
+        if self.retention is not None:
+            value["retention"] = self.retention.to_wire()
+        return value
 
     @classmethod
     def from_wire(cls, value: Mapping[str, object]) -> ConfiguredStation:
@@ -434,7 +529,7 @@ class ConfiguredStation:
             "cameras",
             "model_ids",
         }
-        _require_keys(value, expected, "station")
+        _require_keys(value, expected, "station", optional={"retention"})
         raw_connectors = _array(value["connectors"], "station connectors")
         raw_points = _array(value["points"], "station points")
         raw_cameras = _array(value["cameras"], "station cameras")
@@ -449,6 +544,11 @@ class ConfiguredStation:
             revision=_positive_int(value["revision"], "station revision"),
             runtime_parameters=ResolvedRuntimeParameters.from_wire(
                 _object(value["runtime_parameters"], "station runtime_parameters")
+            ),
+            retention=(
+                ResolvedRetentionPolicy.from_wire(_object(value["retention"], "station retention"))
+                if "retention" in value
+                else None
             ),
             connectors=tuple(
                 ConfiguredConnector.from_wire(_object(item, "station connector"))
@@ -544,6 +644,7 @@ class ConfigurationBundle:
         station_keys = {(station.station_id, station.backend_id) for station in self.stations}
         if len(station_keys) != len(self.stations):
             raise ValueError("configuration station/backend slices must be unique")
+        _check_retention_gate(self.stations, self.required_capabilities)
         grant_stations = [grant.station_id for grant in self.execution_grants]
         if len(set(grant_stations)) != len(grant_stations):
             raise ValueError("configuration execution grants must be unique per station")
@@ -671,6 +772,25 @@ def _canonical_json(value: Mapping[str, object]) -> str:
         raise ValueError("configuration content must be canonical JSON") from error
 
 
+def _check_retention_gate(
+    stations: tuple[ConfiguredStation, ...], required_capabilities: tuple[str, ...]
+) -> None:
+    """生效保留组与它的能力门禁必须同时出现；两者都缺席表示不启用该行为（机器契约演进）。
+
+    两个方向都拒绝：带组就必须声明能力，声明了能力每个站都必须带完整组。因此 Center 不能构造出
+    半套配置，Edge 解析这样的 wire 时也不会猜默认值。
+    """
+    declared = RETENTION_STATION_POLICY_CAPABILITY in required_capabilities
+    with_group = tuple(station for station in stations if station.retention is not None)
+    if with_group and not declared:
+        raise ValueError("a retention group requires the station retention capability")
+
+    if declared and len(with_group) != len(stations):
+        raise ValueError(
+            "the station retention capability requires a resolved retention group per station"
+        )
+
+
 def _require_keys(
     value: Mapping[str, object],
     expected: set[str],
@@ -795,6 +915,9 @@ __all__ = [
     "DISPOSITION_SOUND_LIGHT_OUTPUT_CAPABILITY",
     "DISPOSITION_STOP_OUTPUT_CAPABILITY",
     "EXECUTION_LEASE_WRITE_GATE_CAPABILITY",
+    "RETENTION_POLICY_FIELDS",
+    "RETENTION_RULE_MODES",
+    "RETENTION_STATION_POLICY_CAPABILITY",
     "SAFETY_OUTPUT_BUDGET_SECONDS",
     "SOUND_LIGHT_OUTPUT_REQUESTED_STATE",
     "SOUND_LIGHT_OUTPUT_SEMANTIC_LABEL",
@@ -808,6 +931,8 @@ __all__ = [
     "ConfiguredPoint",
     "ConfiguredStation",
     "ExecutionLease",
+    "ResolvedRetentionPolicy",
+    "ResolvedRetentionRule",
     "ResolvedRuntimeParameters",
     "canonical_json",
     "configuration_from_wire",

@@ -9,27 +9,39 @@ import os
 import sys
 import tempfile
 from collections.abc import Callable
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-_STATIC_MEDIA_KEYS = frozenset(
+# 压缩相关键是本机可选配置：旧配置没有它们时不要求补齐（加载器给默认值），
+# 但它们必须参与合并，否则本机已设置的压缩策略会在下一次应用中心导出时被丢弃。
+_OPTIONAL_MEDIA_KEYS = frozenset(
     {
-        "media_config_path",
-        "recording_directory",
-        "mediamtx_binary",
-        "ffmpeg_binary",
-        "rtsp_bind_address",
-        "webrtc_bind_address",
-        "webrtc_udp_bind_address",
-        "playback_bind_address",
-        "allow_origins",
-        "record_segment_duration_seconds",
-        "preview_release_delay_seconds",
-        "startup_timeout_seconds",
-        "transcode_threads",
         "recording_compression_age_seconds",
+        "recording_compression_enabled",
+        "recording_compression_crf",
     }
+)
+_STATIC_MEDIA_KEYS = (
+    frozenset(
+        {
+            "media_config_path",
+            "recording_directory",
+            "mediamtx_binary",
+            "ffmpeg_binary",
+            "rtsp_bind_address",
+            "webrtc_bind_address",
+            "webrtc_udp_bind_address",
+            "playback_bind_address",
+            "allow_origins",
+            "record_segment_duration_seconds",
+            "preview_release_delay_seconds",
+            "startup_timeout_seconds",
+            "transcode_threads",
+        }
+    )
+    | _OPTIONAL_MEDIA_KEYS
 )
 _EXPORT_KEYS = frozenset(
     {
@@ -98,11 +110,12 @@ def apply_export(
     operator: str | None = None,
 ) -> dict[str, object] | None:
     export = _object(json.loads(export_path.read_text(encoding="utf-8")), "center export")
-    _require_keys(export, _EXPORT_KEYS, "center export")
+    _require_keys(
+        export, _EXPORT_KEYS, "center export", optional=frozenset({"disk_watermark_percent"})
+    )
     edge = _object(json.loads(edge_path.read_text(encoding="utf-8")), "edge configuration")
     local_media = _object(edge.get("media"), "edge media configuration")
-    # 原始素材窗口是本机可选配置；旧配置没有该键时不要求补齐，由边缘加载器给单处默认值。
-    missing = (_STATIC_MEDIA_KEYS - {"recording_compression_age_seconds"}) - local_media.keys()
+    missing = (_STATIC_MEDIA_KEYS - _OPTIONAL_MEDIA_KEYS) - local_media.keys()
     if missing:
         raise ValueError(f"edge media configuration is missing: {', '.join(sorted(missing))}")
 
@@ -138,6 +151,24 @@ def apply_export(
     ):
         media["recording_window_confirmation"] = local_media["recording_window_confirmation"]
     _validate_media(media)
+    if "disk_watermark_percent" in export:
+        # media 校验已建立 edge 源码导入路径; 新工具仍可消费没有水位字段的旧导出。
+        from edge_runtime.storage_health import (
+            DiskHealthConfiguration,
+            load_disk_health_configuration,
+        )
+
+        high = export["disk_watermark_percent"]
+        if isinstance(high, bool) or not isinstance(high, int) or not 1 <= high <= 99:
+            raise ValueError("disk_watermark_percent must be an integer within 1..99")
+        previous = load_disk_health_configuration(edge.get("disk_health"))
+        recovery = previous.recovery_watermark_percent
+        if edge.get("disk_health") is None:
+            defaults = DiskHealthConfiguration()
+            recovery = high * defaults.recovery_watermark_percent / defaults.high_watermark_percent
+        edge["disk_health"] = asdict(
+            replace(previous, high_watermark_percent=high, recovery_watermark_percent=recovery)
+        )
     impact: dict[str, object] | None = None
     if confirm_retention:
         if operator is None or not operator.strip():
@@ -236,9 +267,15 @@ def _validate_media(value: dict[str, object]) -> None:
     _load_media(value)
 
 
-def _require_keys(value: dict[str, Any], required: frozenset[str], name: str) -> None:
+def _require_keys(
+    value: dict[str, Any],
+    required: frozenset[str],
+    name: str,
+    *,
+    optional: frozenset[str] = frozenset(),
+) -> None:
     missing = required - value.keys()
-    unknown = value.keys() - required
+    unknown = value.keys() - required - optional
     if missing:
         raise ValueError(f"{name} is missing: {', '.join(sorted(missing))}")
     if unknown:

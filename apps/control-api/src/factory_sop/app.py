@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import timedelta
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -50,6 +51,7 @@ from factory_sop.dataset.adapters.annotation_routes import (
 from factory_sop.dataset.adapters.annotation_routes import (
     router as annotation_router,
 )
+from factory_sop.dataset.adapters.routes import ddm_result_router, vlm_result_router
 from factory_sop.dataset.adapters.routes import router as dataset_router
 from factory_sop.dataset.api import summary as dataset_summary
 from factory_sop.dataset.errors import DatasetRefusedError
@@ -61,6 +63,7 @@ from factory_sop.device.adapters.routes_commands import (
     connector_router as connector_commands_router,
 )
 from factory_sop.device.adapters.routes_commands import router as device_commands_router
+from factory_sop.device.adapters.routes_compression import router as compression_router
 from factory_sop.device.adapters.routes_connectors import router as connectors_router
 from factory_sop.device.adapters.routes_hosts import router as inference_hosts_router
 from factory_sop.device.adapters.routes_points import (
@@ -70,6 +73,7 @@ from factory_sop.device.adapters.routes_points import (
     router as points_router,
 )
 from factory_sop.device.adapters.routes_stations import router as stations_router
+from factory_sop.device.api import DeviceHostGateway, host_identity_from_headers
 from factory_sop.device.api import summary as device_summary
 from factory_sop.device.errors import DeviceRefusedError
 from factory_sop.device.errors import refusal_problem as device_refusal_problem
@@ -79,6 +83,7 @@ from factory_sop.evidence.adapters.reclip_routes import router as evidence_recli
 from factory_sop.evidence.adapters.routes import router as evidence_router
 from factory_sop.evidence.playback import EvidenceAccessRefusedError
 from factory_sop.execution.adapters import dependencies as execution_dependencies
+from factory_sop.execution.adapters import normal_routes as execution_normal_routes
 from factory_sop.execution.adapters import routes as execution_routes
 from factory_sop.execution.errors import ExecutionRefusedError
 from factory_sop.execution.errors import refusal_problem as execution_refusal_problem
@@ -107,6 +112,17 @@ from factory_sop.problem import (
     problem_openapi_response,
     problem_response,
 )
+from factory_sop.retention.adapters import dependencies as retention_dependencies
+from factory_sop.retention.adapters.deletion_routes import (
+    router as retention_deletion_router,
+)
+from factory_sop.retention.adapters.impact_access_routes import (
+    router as retention_impact_access_router,
+)
+from factory_sop.retention.adapters.routes import router as retention_router
+from factory_sop.retention.api import DeletionAuthorityBusyError
+from factory_sop.retention.errors import RetentionRefusedError
+from factory_sop.retention.errors import refusal_problem as retention_refusal_problem
 from factory_sop.settings import Settings
 from factory_sop.template.adapters import dependencies as template_dependencies
 from factory_sop.template.adapters.routes import router as template_router
@@ -146,6 +162,28 @@ async def liveness() -> dict[str, str]:
     fault that is not the container's.
     """
     return {"status": "alive"}
+
+
+def _retention_host_authenticator(
+    gateway: Annotated[DeviceHostGateway, Depends(device_dependencies.host_gateway)],
+) -> retention_dependencies.RetentionHostAuthenticator:
+    def authenticate(
+        *, request: Request, host_id: UUID, body: dict[str, object], now: datetime
+    ) -> None:
+        gateway.authenticate(
+            host=host_identity_from_headers(
+                host_id=host_id,
+                method=request.method,
+                path=request.url.path,
+                body=body,
+                timestamp=request.headers.get("X-Inference-Host-Timestamp"),
+                nonce=request.headers.get("X-Inference-Host-Nonce"),
+                signature=request.headers.get("X-Inference-Host-Signature"),
+            ),
+            now=now,
+        )
+
+    return authenticate
 
 
 def create_app(
@@ -227,6 +265,7 @@ def create_app(
     app.include_router(configuration_router, prefix=API_PREFIX)
     app.include_router(inference_backends_router, prefix=API_PREFIX)
     app.include_router(device_commands_router, prefix=API_PREFIX)
+    app.include_router(compression_router, prefix=API_PREFIX)
     app.include_router(evidence_reclip_router, prefix=API_PREFIX)
     app.include_router(stations_router, prefix=API_PREFIX)
     app.include_router(cameras_router, prefix=API_PREFIX)
@@ -238,6 +277,8 @@ def create_app(
     app.include_router(auth_user_administration.router, prefix=API_PREFIX)
     app.include_router(template_router, prefix=API_PREFIX)
     app.include_router(dataset_router, prefix=API_PREFIX)
+    app.include_router(ddm_result_router, prefix=API_PREFIX)
+    app.include_router(vlm_result_router, prefix=API_PREFIX)
     app.include_router(annotation_router, prefix=API_PREFIX)
     app.include_router(annotation_context_router, prefix=API_PREFIX)
     app.include_router(annotation_gateway_router, prefix=API_PREFIX)
@@ -249,6 +290,12 @@ def create_app(
     app.include_router(evidence_router, prefix=API_PREFIX)
     app.include_router(evidence_playback_router, prefix=API_PREFIX)
     app.include_router(execution_routes.router, prefix=API_PREFIX)
+    app.include_router(execution_normal_routes.router, prefix=API_PREFIX)
+    app.include_router(execution_normal_routes.command_router, prefix=API_PREFIX)
+    app.include_router(retention_router, prefix=API_PREFIX)
+    app.include_router(retention_impact_access_router, prefix=API_PREFIX)
+    # 证据删除资格是主机签名机器端点：claim/verify/result 三个动作同属一个 owner 面。
+    app.include_router(retention_deletion_router, prefix=API_PREFIX)
     app.include_router(overview_router, prefix=API_PREFIX)
     # 组合根把跨模块查询和任务依赖接到各自模块的真实适配器。
     app.dependency_overrides[configuration_dependencies.device_gateway] = (
@@ -285,11 +332,58 @@ def create_app(
     app.dependency_overrides[job_dependencies.dataset_resource] = (
         dataset_dependencies.dataset_resource
     )
+    # 正常交权命令队列归 device，execution 经同一请求事务的 device owner seam 访问。
+    app.dependency_overrides[execution_dependencies.normal_handover_commands] = (
+        device_dependencies.execution_handover_commands
+    )
     app.dependency_overrides[dataset_dependencies.jobs] = job_dependencies.validation_jobs
     app.dependency_overrides[dataset_dependencies.annotation_jobs] = (
         job_dependencies.annotation_jobs
     )
     app.dependency_overrides[dataset_dependencies.usage_jobs] = job_dependencies.usage_jobs
+    # 保留策略归 retention、工位事实归 device，两者各自经对方 owner 的公开 seam 访问。
+    app.dependency_overrides[configuration_dependencies.retention_gateway] = (
+        retention_dependencies.configuration_gateway
+    )
+    app.dependency_overrides[retention_dependencies.station_facts] = (
+        device_dependencies.station_retention_facts
+    )
+    app.dependency_overrides[retention_dependencies.edge_sources] = (
+        device_dependencies.retention_sources
+    )
+    app.dependency_overrides[retention_dependencies.host_authenticator] = (
+        _retention_host_authenticator
+    )
+    # 保留变更影响估算由 retention 用例编排,各数据面经 owner 只读 seam。
+    app.dependency_overrides[retention_dependencies.evidence_impact] = (
+        evidence_dependencies.retention_impact
+    )
+    app.dependency_overrides[retention_dependencies.monitor_impact] = (
+        monitor_dependencies.retention_impact
+    )
+    app.dependency_overrides[retention_dependencies.evidence_deletion] = (
+        evidence_dependencies.deletion_gateway
+    )
+    # retention 策略写入与设备变更共用 evidence 拥有的删除认领权威锁。
+    app.dependency_overrides[retention_dependencies.deletion_authority_fence] = (
+        evidence_dependencies.deletion_gateway
+    )
+    # 设备工位停用/恢复与配置签发共用 evidence 拥有的删除认领权威锁。
+    app.dependency_overrides[device_dependencies.deletion_authority_fence] = (
+        evidence_dependencies.deletion_gateway
+    )
+
+    @app.exception_handler(DeletionAuthorityBusyError)
+    async def deletion_authority_busy(
+        request: Request, error: DeletionAuthorityBusyError
+    ) -> Response:
+        """已授权未结案删除期间拒绝权威变更：状态与错误码复用现有线格式，不新增枚举。"""
+        return problem_response(
+            status=409,
+            title="存在已授权未结案的证据删除，请等来源机终局反馈后再修改",
+            error_code=ApiErrorCode.STATE_CONFLICT,
+            detail=str(error),
+        )
 
     @app.exception_handler(EvidenceAccessRefusedError)
     async def evidence_access_refused(
@@ -424,6 +518,17 @@ def create_app(
             status=status_code,
             title=title,
             error_code=ApiErrorCode(error.code.value),
+        )
+
+    @app.exception_handler(RetentionRefusedError)
+    async def retention_refused(request: Request, error: RetentionRefusedError) -> Response:
+        """报告保留策略拒绝：状态与标题由拒绝码自己给出，detail 只携带非秘密原因。"""
+        status_code, title = retention_refusal_problem(error.code)
+        return problem_response(
+            status=status_code,
+            title=title,
+            error_code=ApiErrorCode(error.code.value),
+            detail=error.detail,
         )
 
     @app.exception_handler(RequestValidationError)

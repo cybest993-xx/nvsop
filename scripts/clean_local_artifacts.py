@@ -39,12 +39,15 @@ ENVIRONMENT_PATHS = (
     Path(".tmp/tools"),
     Path(".husky/_"),
     Path("--version/_"),
+    Path("apps/control-api/.mypy_cache"),
     Path("apps/control-api/.pytest_cache"),
     Path("apps/edge-runtime/.mypy_cache"),
     Path("apps/edge-runtime/.pytest_cache"),
     Path("apps/edge-runtime/.ruff_cache"),
     Path("apps/edge-runtime/.venv"),
     Path("packages/contracts/.pytest_cache"),
+    # 旧版 Web 构建将产物写到子项目 .nvsop；只清已知的 dist。
+    Path("apps/control-web/.nvsop/artifacts/web/dist"),
 )
 
 GENERATED_METADATA_ROOTS = (
@@ -77,7 +80,10 @@ def clean(root: Path = REPOSITORY_ROOT, *, purge: bool = False) -> list[Path]:
     removed: list[Path] = []
 
     paths = ARTIFACT_PATHS + ENVIRONMENT_PATHS if purge else ARTIFACT_PATHS
+    # 不能沿父目录 symlink 删除共享目标中的缓存，包括旧版 Web .nvsop。
     for relative in paths:
+        if any((root / parent).is_symlink() for parent in relative.parents if parent != Path(".")):
+            continue
         path = root / relative
         if (
             not purge
@@ -97,6 +103,20 @@ def clean(root: Path = REPOSITORY_ROOT, *, purge: bool = False) -> list[Path]:
 
     if not purge:
         return removed
+
+    # 旧版 Web 的空父目录与任务根 .nvsop 一起收尾；未知状态仍保留。
+    for relative in (
+        Path("apps/control-web/.nvsop/artifacts/web"),
+        Path("apps/control-web/.nvsop/artifacts"),
+        Path("apps/control-web/.nvsop"),
+        Path(".nvsop"),
+    ):
+        path = root / relative
+        if any((root / parent).is_symlink() for parent in relative.parents if parent != Path(".")):
+            continue
+        if path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
+            path.rmdir()
+            removed.append(relative)
 
     generated: list[Path] = []
     for relative in GENERATED_METADATA_ROOTS:

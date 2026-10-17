@@ -32,9 +32,13 @@ class ArqJobDispatcher:
         settings: RedisSettings,
         *,
         session_factory: sessionmaker[Session] | None = None,
+        configured_training_types: frozenset[JobType] = frozenset(),
+        augmentation_configured: bool = False,
     ) -> None:
         self._settings = settings
         self._session_factory = session_factory
+        self._configured_training_types = configured_training_types
+        self._augmentation_configured = augmentation_configured
 
     @classmethod
     def from_settings(
@@ -61,7 +65,33 @@ class ArqJobDispatcher:
                 ssl=connection.ssl,
             ),
             session_factory=session_factory,
+            augmentation_configured=settings.augmentation_backend_url is not None,
+            configured_training_types=frozenset(
+                job_type
+                for job_type, configured in (
+                    (
+                        JobType.DATASET_DDM_TRAINING,
+                        settings.ddm_training_backend_url is not None
+                        and settings.ddm_training_config_path is not None,
+                    ),
+                    (
+                        JobType.DATASET_VLM_TRAINING,
+                        settings.vlm_training_backend_url is not None,
+                    ),
+                )
+                if configured
+            ),
         )
+
+    @property
+    def configured_training_types(self) -> frozenset[JobType]:
+        """训练配置有明确部署绑定时，扫描器才放行对应类型（不在启动时读取文件）。"""
+        return self._configured_training_types
+
+    @property
+    def augmentation_configured(self) -> bool:
+        """增强有部署绑定时才投递；基座离线不影响其他任务。"""
+        return self._augmentation_configured
 
     @property
     def redis_settings(self) -> RedisSettings:
@@ -75,7 +105,12 @@ class ArqJobDispatcher:
         """异步投递一个已提交任务；失败时保持本次 pending generation 可补投。"""
         expected_updated_at: datetime | None = None
         try:
-            function, expected_updated_at = self._worker_target(job_id)
+            target = self._worker_target(job_id)
+            if target is None:
+                # 已知延后类型（训练命令）：安全派发就绪前不向 ARQ 投递，
+                # 也不把它误报为投递失败。
+                return
+            function, expected_updated_at = target
             accepted = await self._dispatch(
                 job_id,
                 function=function,
@@ -114,14 +149,28 @@ class ArqJobDispatcher:
         finally:
             await pool.close()
 
-    def _worker_target(self, job_id: UUID) -> tuple[str, datetime]:
-        """读取投递入口及其 pending generation 的 CAS 时间戳。"""
+    def _worker_target(self, job_id: UUID) -> tuple[str, datetime] | None:
+        """读取投递入口及其 pending generation 的 CAS 时间戳；延后类型返回 ``None``。"""
         if self._session_factory is None:
             raise RuntimeError("任务 dispatcher 未配置数据库 session factory")
         with self._session_factory() as session:
             job = PostgresJobRepository(session).by_id(job_id)
         if job is None:
             raise ValueError(f"任务不存在：{job_id}")
+        if job.job_type is JobType.DATASET_DDM_TRAINING:
+            # 未配置对应基座时命令只保留 outbox 事实（held），不注册、不投递可 start 的
+            # 函数；配置后才在既有 ARQ 进程内执行查询/登记，不新增进程。
+            if JobType.DATASET_DDM_TRAINING not in self._configured_training_types:
+                return None
+            return "dispatch_ddm_training_job", job.updated_at
+        if job.job_type is JobType.DATASET_VLM_TRAINING:
+            if JobType.DATASET_VLM_TRAINING not in self._configured_training_types:
+                return None
+            return "dispatch_vlm_training_job", job.updated_at
+        if job.job_type is JobType.DATASET_AUGMENTATION:
+            if not self._augmentation_configured:
+                return None
+            return "augment_dataset_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION_PREPARATION:
             return "prepare_annotation_context_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION:

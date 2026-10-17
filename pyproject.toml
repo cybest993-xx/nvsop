@@ -41,6 +41,10 @@ dev = [
     "mypy==1.18.2",
     "import-linter==2.3",
     "pytest==8.4.2",
+    # `make check` runs the Center suites across workers (pytest-xdist); test-only and pure
+    # Python. Container-backed suites group by file so a module's fixed ports and fixtures
+    # stay on one worker; the Makefile decides per suite how many workers are safe.
+    "pytest-xdist==3.8.0",
     # starlette 1.6's TestClient runs on httpx2; the older httpx raises a deprecation
     # warning on import. Test-only — the application itself makes no outbound HTTP call yet.
     "httpx2==2.12.0",
@@ -51,6 +55,11 @@ dev = [
     # (harness §6). Test-only: nothing the deployment runs imports it.
     "testcontainers[postgres]==4.15.0",
 ]
+
+[tool.pyright]
+venvPath = ".nvsop"
+venv = "venv"
+pythonVersion = "3.12"
 
 [tool.ruff]
 line-length = 100
@@ -102,6 +111,13 @@ allowed-confusables = ["，", "。", "：", "；", "！", "？", "（", "）", "
 [tool.mypy]
 python_version = "3.12"
 strict = true
+# 单文件诊断也使用当前 worktree 的解释器和源码根，不依赖启动目录。
+python_executable = "$MYPY_CONFIG_FILE_DIR/.nvsop/venv/bin/python"
+mypy_path = [
+    "$MYPY_CONFIG_FILE_DIR/apps/control-api/src",
+    "$MYPY_CONFIG_FILE_DIR/apps/edge-runtime/src",
+    "$MYPY_CONFIG_FILE_DIR/packages/contracts/src",
+]
 # `tests/` carries no `__init__.py`, so mypy needs the source root to derive module names
 # from the file paths instead of walking up looking for packages.
 explicit_package_bases = true
@@ -310,9 +326,10 @@ ignore_imports = [
 name = "configuration composition only depends on owner public seams"
 type = "forbidden"
 source_modules = ["factory_sop.configuration.composition"]
-forbidden_modules = ["factory_sop.configuration.adapters", "factory_sop.device", "factory_sop.template", "fastapi", "sqlalchemy"]
+forbidden_modules = ["factory_sop.configuration.adapters", "factory_sop.device", "factory_sop.retention", "factory_sop.template", "fastapi", "sqlalchemy"]
 ignore_imports = [
     "factory_sop.configuration.composition -> factory_sop.device.api",
+    "factory_sop.configuration.composition -> factory_sop.retention.api",
     "factory_sop.configuration.composition -> factory_sop.template.api",
 ]
 

@@ -8,6 +8,8 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
+from nvsop_contracts import EvidenceDeletionClaimStatus
+
 
 class EvidenceKind(StrEnum):
     """证据媒体的切片形态：片段或锚点关键帧（§5.20）。"""
@@ -29,6 +31,8 @@ class EvidenceStatus(StrEnum):
     PENDING = "pending"
     AVAILABLE = "available"
     FAILED = "failed"
+    # 来源机已确认删除该媒体：引用与复核历史保留，但媒体不再可用，重新登记不得复活它。
+    DELETED = "deleted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +202,69 @@ class EvidenceReview:
             raise ValueError("review reviewer_name must be a non-empty string")
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceReviewHold:
+    """一位复核人的持久在审占用；结束只释放该 reviewer 的 hold。"""
+
+    review_id: UUID
+    evidence_id: str
+    generation: str
+    reviewer_id: UUID
+    started_at: datetime
+    ended_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReferenceLock:
+    """引用行的写入前锁事实：被锁定的登记引用与该证据是否有未结案删除认领。
+
+    引用写入者（复核、再切片、播放、重新登记）先取得该锁，再读取或写入其它事实；锁序始终是
+    "先 ``evidence_evidence`` 行，再认领与保护状态"，因此删除认领的创建与引用写入之间不会
+    互相死锁（§5.19 引用保护）。
+
+    """
+
+    reference: EvidenceReference | None
+    pending_claim: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceDeletionClaim:
+    """evidence 拥有的一条删除认领；未结案期间该引用不得被删除，也不得再产生新引用。"""
+
+    claim_id: UUID
+    evidence_id: str
+    host_id: UUID
+    config_revision: int
+    effective_sha256: str
+    default_revision: int
+    station_revision: int
+    status: EvidenceDeletionClaimStatus
+    created_at: datetime
+    expires_at: datetime
+    settled_at: datetime | None = None
+    authorized_at: datetime | None = None
+    reason_code: str | None = None
+    detail: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.evidence_id, str) or not self.evidence_id:
+            raise ValueError("deletion claim evidence_id must be a non-empty string")
+        if isinstance(self.config_revision, bool) or self.config_revision < 1:
+            raise ValueError("deletion claim config revision must be positive")
+        if (
+            not isinstance(self.effective_sha256, str)
+            or len(self.effective_sha256) != 64
+            or any(character not in "0123456789abcdefABCDEF" for character in self.effective_sha256)
+        ):
+            raise ValueError("deletion claim digest must be 64 hexadecimal characters")
+        if self.status is EvidenceDeletionClaimStatus.PENDING:
+            if self.settled_at is not None or self.reason_code is not None:
+                raise ValueError("pending deletion claims carry no terminal outcome")
+        elif self.settled_at is None or not self.reason_code:
+            raise ValueError("settled deletion claims must carry a settled time and reason code")
+
+
 class ReclipRequestStatus(StrEnum):
     """再切片委托的生命周期状态；成功追加新引用，终局失败记录可查询原因。"""
 
@@ -283,13 +350,54 @@ class EvidenceReclipRequest:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceImpactCount:
+    """证据 owner 的只读计数；大小来自登记事实，不读取媒体文件。"""
+
+    objects: int
+    known_bytes: int
+    unknown_size_objects: int
+    earliest: datetime | None
+    latest: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReviewUsageCount:
+    """同一实例的引用在窗口内的复核状态聚合；``known`` 为假表示复核状态未知。
+
+    ``known`` 为假的实例不得按"没有在审复核"处理，``active`` 为真的实例必须保持受保护。
+    """
+
+    host_id: UUID
+    station_id: UUID
+    instance_id: int
+    known: bool
+    active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceInstanceCount:
+    """同一来源/工位/实例的引用计数；linked 与 unlinked 互斥。"""
+
+    host_id: UUID
+    station_id: UUID
+    instance_id: int
+    unlinked: EvidenceImpactCount
+    linked: EvidenceImpactCount
+
+
 __all__ = [
+    "EvidenceDeletionClaim",
+    "EvidenceImpactCount",
+    "EvidenceInstanceCount",
     "EvidenceKind",
     "EvidenceOrigin",
     "EvidenceReclipRequest",
     "EvidenceReference",
+    "EvidenceReferenceLock",
     "EvidenceRegistration",
     "EvidenceReview",
+    "EvidenceReviewUsageCount",
     "EvidenceStatus",
     "ReclipRequestStatus",
     "ReviewConclusion",

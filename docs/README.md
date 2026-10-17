@@ -41,6 +41,7 @@
 | [媒体部署说明](../deploy/media/README.md) | 合成 RTSP、MediaMTX、CPU 转码和本机媒体配置应用 |
 | [推理机推理服务部署](../deploy/edge/README.md) | 每主机/每后端的推理服务 Compose 身份、资源端口与只读 secret 边界 |
 | [目标环境验证矩阵](research/target-environment-validation-matrix.md) | GPU、真相机、连接器、离线、多机、容量和长稳门禁 |
+| [全模块性能测试规划](research/performance-test-plan.md) | 按当前实现分层规划可重复性能基线、并发与后续专项测试 |
 
 ## 事实与来源
 
@@ -48,6 +49,7 @@
 |---|---|
 | [已实测事实](design/measured-facts.md) | 带证据出处的设计前提，按记录的提交和环境解读 |
 | [基座能力核验](research/nvidia-base-capability-boundary.md) | 指定 NVIDIA 提交的能力研究，不替代后续产品决策 |
+| [S120 跨模块证据验证](research/s120-runtime-evidence.md) | 推理机本地证据→主机签名上报→中心镜像→授权读取/复核的一次受控实测（软件路径） |
 | [基座验证台账](base/verified-commits.md) | 验证过的上游提交、受控补丁及已知上游问题 |
 
 文档维护规则集中在[文档管理](engineering/documentation.md)，每项事实维护一个主要位置。任务当前状态与依赖留在 GitHub，旧实施计划迁移有效事实后由 Git 历史保留，不形成第二套现行指导。

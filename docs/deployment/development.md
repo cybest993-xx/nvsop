@@ -118,6 +118,16 @@ make dev-logs SERVICE=worker TAIL=200
 
 `make dev-down` **不会删除 named volumes**；输出中的 `volumes_removed` 保持 `false`。数据库、Redis、annotation media 与 dataset 训练素材卷的开发数据因此会保留。
 
+## DDM 训练的可选部署
+
+`deploy/dev/compose.yaml` 的 `training-gpu` profile 才启动原 DDM 训练服务；中心 API/worker 不以 GPU 服务作为 `depends_on` 启动门禁。默认中心已有该服务的配置绑定，profile 未启动时命令保留明确不可达/未知诊断，不伪造训练成功，也不影响其他控制 API。启用该 profile、构建训练镜像和实际训练须另有 GPU/模型资源授权；软件回归不加载权重。
+
+Compose 把 `ddm-dataset` 和 `ddm-results` 以相同绝对路径挂入 DDM 与 worker；worker 只读结果卷。原 `assets/config/ddm_train_config.yaml` 只读挂入两者，基座的 `CONFIG_PATH`/`TRAIN_CONFIG_NAME` 与 worker 的 `SOP_DDM_TRAINING_CONFIG_PATH` 指向同一文件。环境配置约束由[配置边界](configuration.md#ddm-共享路径与读取边界)拥有。
+
+网页从中心读回命令和结果摘要，再通过独立 8444 `/ddm-results/{command_id}/config|checkpoint` 读取已登记对象；网关只读挂载 `dataset-files`、核对当前会话和数据集查看权限，不开放原始目录或任意对象键。现有标注视频/切片/归档路由不变。
+
+同一 profile 里的 `vlm-training` 是同一个可选部署的另一套基座：`vlm-dataset`/`vlm-results` 同样以相同绝对路径挂入基座与 worker（worker 只读结果卷），基座的 `CONFIG_PATH`/`TOOL_PATH` 由 vendor `cr-training-ms/assets/config` 与 `assets/tools` 只读挂入。中心侧只有 `SOP_VLM_TRAINING_BACKEND_URL` 与两个根目录；未配置时 VLM 命令保持待派发。结果走独立的 8444 `/vlm-results/{command_id}/config|checkpoint`：后者是基座步目录的清单对象，不是权重字节。两条结果路由使用同一套网关授权，只是对象键命名空间不同。
+
 ## 常见排障
 
 ### 当前分支不是 `main`

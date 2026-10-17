@@ -719,6 +719,7 @@
           "COMMAND_CLAIM_EXPIRED",
           "COMMAND_CLAIM_TOKEN_INVALID",
           "COMMAND_ALREADY_COMPLETED",
+          "COMMAND_OBSERVATION_UNCONFIRMED",
           "COMMAND_IDEMPOTENCY_CONFLICT",
           "COMMAND_CONFIGURATION_CHANGED",
           "COMMAND_TARGET_NOT_FOUND",
@@ -776,6 +777,10 @@
           "USAGE_STATE_CONFLICT",
           "ARTIFACT_NOT_FOUND",
           "ARTIFACT_UNAVAILABLE",
+          "DDM_TRAINING_COMMAND_NOT_FOUND",
+          "DDM_TRAINING_RESULT_NOT_FOUND",
+          "VLM_TRAINING_COMMAND_NOT_FOUND",
+          "VLM_TRAINING_RESULT_NOT_FOUND",
           "JOB_NOT_FOUND",
           "JOB_RESOURCE_NOT_FOUND",
           "ACTIVE_GRANT_EXISTS",
@@ -788,7 +793,21 @@
           "HANDOVER_NOT_ELIGIBLE",
           "HANDOVER_TARGET_NOT_FOUND",
           "HANDOVER_SOURCE_MISMATCH",
-          "HANDOVER_SAME_HOST"
+          "HANDOVER_SAME_HOST",
+          "NORMAL_HANDOVER_NOT_FOUND",
+          "NORMAL_HANDOVER_PENDING",
+          "NORMAL_HANDOVER_ALREADY_TERMINAL",
+          "NORMAL_HANDOVER_ALREADY_CLAIMED",
+          "NORMAL_HANDOVER_GRANT_EXPIRED",
+          "NORMAL_HANDOVER_STALE_CONFIRMATION",
+          "NORMAL_HANDOVER_IDENTITY_MISMATCH",
+          "NORMAL_HANDOVER_NOT_CONFIRMED",
+          "RETENTION_POLICY_CONFLICT",
+          "RETENTION_POLICY_INVALID",
+          "RETENTION_ESTIMATE_REQUIRED",
+          "RETENTION_ESTIMATE_STALE",
+          "RETENTION_ESTIMATE_INCOMPLETE",
+          "RETENTION_ESTIMATE_TTL_UNCONFIGURED"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -996,6 +1015,227 @@
           "role_ids"
         ],
         "title": "AssignedRoles",
+        "type": "object"
+      },
+      "AugmentationStatus": {
+        "description": "unknown/bound 持续占用不安全输入；只有已证实终结才能释放。",
+        "enum": [
+          "pending",
+          "result_unknown",
+          "bound",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "AugmentationStatus",
+        "type": "string"
+      },
+      "AugmentationView": {
+        "description": "公开状态与来源摘要；内部冻结载荷、共享卷清单和对象键留在 dataset。",
+        "properties": {
+          "annotation_execution_id": {
+            "format": "uuid",
+            "title": "Annotation Execution Id",
+            "type": "string"
+          },
+          "base_augmentation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Augmentation Id"
+          },
+          "base_progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Progress"
+          },
+          "base_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Status"
+          },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At"
+          },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled By"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "dataset_id": {
+            "format": "uuid",
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatched At"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "frame_drop_iterations": {
+            "title": "Frame Drop Iterations",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_source": {
+            "title": "Input Source",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "last_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Observed At"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          },
+          "result_failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Failure Code"
+          },
+          "result_file_count": {
+            "title": "Result File Count",
+            "type": "integer"
+          },
+          "result_status": {
+            "enum": [
+              "not_registered",
+              "registered"
+            ],
+            "title": "Result Status",
+            "type": "string"
+          },
+          "result_total_bytes": {
+            "title": "Result Total Bytes",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AugmentationStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dataset_id",
+          "annotation_execution_id",
+          "job_id",
+          "frame_drop_iterations",
+          "input_source",
+          "original_filename",
+          "status",
+          "dispatched_at",
+          "base_augmentation_id",
+          "base_status",
+          "base_progress",
+          "last_observed_at",
+          "failure_code",
+          "result_status",
+          "result_file_count",
+          "result_total_bytes",
+          "result_failure_code",
+          "cancelled_by",
+          "cancelled_at",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AugmentationView",
         "type": "object"
       },
       "BackendConfigurationStatusView": {
@@ -1688,6 +1928,216 @@
           "updated_at"
         ],
         "title": "CameraView",
+        "type": "object"
+      },
+      "CompressionClaimView": {
+        "properties": {
+          "action": {
+            "enum": [
+              "inspect",
+              "pause",
+              "resume",
+              "abort"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "claim_token": {
+            "title": "Claim Token",
+            "type": "string"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "command_type": {
+            "const": "control_recording_compression",
+            "default": "control_recording_compression",
+            "title": "Command Type",
+            "type": "string"
+          },
+          "lease_expires_at": {
+            "title": "Lease Expires At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "command_id",
+          "action",
+          "claim_token",
+          "lease_expires_at"
+        ],
+        "title": "CompressionClaimView",
+        "type": "object"
+      },
+      "CompressionCommandView": {
+        "properties": {
+          "action": {
+            "enum": [
+              "inspect",
+              "pause",
+              "resume",
+              "abort"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompressionObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PendingCommandStatus"
+          }
+        },
+        "required": [
+          "id",
+          "host_id",
+          "action",
+          "status",
+          "observation",
+          "observed_at",
+          "failure_code"
+        ],
+        "title": "CompressionCommandView",
+        "type": "object"
+      },
+      "CompressionInput": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "inspect",
+              "pause",
+              "resume",
+              "abort"
+            ],
+            "title": "Action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "CompressionInput",
+        "type": "object"
+      },
+      "CompressionObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "readrate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readrate"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "string"
+          },
+          "segment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "requested",
+          "segment",
+          "pid",
+          "readrate",
+          "failure_code",
+          "detail"
+        ],
+        "title": "CompressionObservation",
         "type": "object"
       },
       "ConfirmVideoUploadInput": {
@@ -2577,6 +3027,528 @@
         "title": "DatasetView",
         "type": "object"
       },
+      "DdmInputSelectionInput": {
+        "additionalProperties": false,
+        "description": "一次 DDM 训练选择的一套已通过输入来源。",
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "dataset_id": {
+            "format": "uuid",
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "usage_check_id": {
+            "format": "uuid",
+            "title": "Usage Check Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "usage_check_id",
+          "artifact_id"
+        ],
+        "title": "DdmInputSelectionInput",
+        "type": "object"
+      },
+      "DdmResultAccessView": {
+        "additionalProperties": false,
+        "description": "已授权数据通道的访问地址；控制面从不中转大体积字节。",
+        "properties": {
+          "checkpoint_url": {
+            "title": "Checkpoint Url",
+            "type": "string"
+          },
+          "config_url": {
+            "title": "Config Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "config_url",
+          "checkpoint_url"
+        ],
+        "title": "DdmResultAccessView",
+        "type": "object"
+      },
+      "DdmResultFileView": {
+        "additionalProperties": false,
+        "properties": {
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sha256",
+          "size"
+        ],
+        "title": "DdmResultFileView",
+        "type": "object"
+      },
+      "DdmTrainingCommandAcceptedView": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/DdmTrainingCommandView"
+          },
+          "job": {
+            "$ref": "#/components/schemas/UsageJobView"
+          }
+        },
+        "required": [
+          "command",
+          "job"
+        ],
+        "title": "DdmTrainingCommandAcceptedView",
+        "type": "object"
+      },
+      "DdmTrainingCommandView": {
+        "description": "一条训练命令的公开事实（DDM 与 VLM 共用同一形状）。\n\nschema 名由已发布契约冻结（ADR-0003）：这里是同一份 wire 事实，不是 DDM 专属字段。\n\n只暴露应用状态、基座原状态/观测时刻/查询诊断与结果登记事实；冻结负载、内部路径、\n媒体身份与消费摘要不进入公开响应。",
+        "properties": {
+          "base_current_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Current Step"
+          },
+          "base_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Job Id"
+          },
+          "base_progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Progress"
+          },
+          "base_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Status"
+          },
+          "base_total_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Total Steps"
+          },
+          "cancel_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Detail"
+          },
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested At"
+          },
+          "cancel_requested_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Requested By"
+          },
+          "cancel_response_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Response Message"
+          },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At"
+          },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled By"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "dataset_id": {
+            "format": "uuid",
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Detail"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Observed At"
+          },
+          "observation_failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Failure Code"
+          },
+          "observation_failure_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Failure Detail"
+          },
+          "request_digest": {
+            "title": "Request Digest",
+            "type": "string"
+          },
+          "result_checkpoint_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Checkpoint Sha256"
+          },
+          "result_checkpoint_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Checkpoint Size"
+          },
+          "result_config_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Config Sha256"
+          },
+          "result_config_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Config Size"
+          },
+          "result_failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Failure Code"
+          },
+          "result_failure_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Failure Detail"
+          },
+          "result_generation": {
+            "title": "Result Generation",
+            "type": "integer"
+          },
+          "result_registered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Registered At"
+          },
+          "result_status": {
+            "title": "Result Status",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "dataset_id",
+          "status",
+          "request_digest",
+          "base_job_id",
+          "base_status",
+          "base_progress",
+          "base_current_step",
+          "base_total_steps",
+          "last_observed_at",
+          "observation_failure_code",
+          "observation_failure_detail",
+          "failure_code",
+          "failure_detail",
+          "result_status",
+          "result_generation",
+          "result_config_sha256",
+          "result_config_size",
+          "result_checkpoint_sha256",
+          "result_checkpoint_size",
+          "result_failure_code",
+          "result_failure_detail",
+          "result_registered_at",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DdmTrainingCommandView",
+        "type": "object"
+      },
+      "DdmTrainingResultView": {
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DdmResultAccessView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "checkpoint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DdmResultFileView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DdmResultFileView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dataset_id": {
+            "format": "uuid",
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Detail"
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "dataset_id",
+          "status",
+          "config",
+          "checkpoint",
+          "failure_code",
+          "failure_detail",
+          "registered_at",
+          "access"
+        ],
+        "title": "DdmTrainingResultView",
+        "type": "object"
+      },
       "DesiredTemplateBindingView": {
         "properties": {
           "config_revision": {
@@ -2737,6 +3709,44 @@
           }
         },
         "title": "DeviceSummaryData",
+        "type": "object"
+      },
+      "EdgeImpactSourceView": {
+        "properties": {
+          "configuration_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Revision"
+          },
+          "configuration_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Sha256"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_id",
+          "configuration_revision",
+          "configuration_sha256"
+        ],
+        "title": "EdgeImpactSourceView",
         "type": "object"
       },
       "EditedRole": {
@@ -3175,6 +4185,91 @@
         "title": "EvidenceReviewBody",
         "type": "object"
       },
+      "EvidenceReviewCancelBody": {
+        "additionalProperties": false,
+        "description": "取消本人在审占用；只认自己创建的 review_id。",
+        "properties": {
+          "review_id": {
+            "format": "uuid",
+            "title": "Review Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review_id"
+        ],
+        "title": "EvidenceReviewCancelBody",
+        "type": "object"
+      },
+      "EvidenceReviewHoldBody": {
+        "additionalProperties": false,
+        "description": "开始一次在审复核：稳定幂等 ID 与证据代次；不接受其它扩展字段。",
+        "properties": {
+          "generation": {
+            "title": "Generation",
+            "type": "string"
+          },
+          "review_id": {
+            "format": "uuid",
+            "title": "Review Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review_id",
+          "generation"
+        ],
+        "title": "EvidenceReviewHoldBody",
+        "type": "object"
+      },
+      "EvidenceReviewHoldRecord": {
+        "properties": {
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "evidence_id": {
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "string"
+          },
+          "review_id": {
+            "format": "uuid",
+            "title": "Review Id",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "format": "uuid",
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review_id",
+          "evidence_id",
+          "generation",
+          "reviewer_id",
+          "started_at"
+        ],
+        "title": "EvidenceReviewHoldRecord",
+        "type": "object"
+      },
       "EvidenceReviewRecord": {
         "properties": {
           "conclusion": {
@@ -3225,7 +4320,8 @@
         "enum": [
           "pending",
           "available",
-          "failed"
+          "failed",
+          "deleted"
         ],
         "title": "EvidenceStatus",
         "type": "string"
@@ -3401,6 +4497,35 @@
           "message"
         ],
         "title": "FieldError",
+        "type": "object"
+      },
+      "GlobalRetentionPolicyUpdate": {
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          }
+        },
+        "required": [
+          "policy"
+        ],
+        "title": "GlobalRetentionPolicyUpdate",
+        "type": "object"
+      },
+      "GlobalRetentionPolicyView": {
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy",
+          "revision"
+        ],
+        "title": "GlobalRetentionPolicyView",
         "type": "object"
       },
       "HandoverConfirmationInput": {
@@ -3664,6 +4789,17 @@
             "title": "Cameras",
             "type": "array"
           },
+          "disk_watermark_percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Watermark Percent"
+          },
           "host_id": {
             "format": "uuid",
             "title": "Host Id",
@@ -3731,6 +4867,77 @@
           "status"
         ],
         "title": "HostStatus",
+        "type": "object"
+      },
+      "ImpactAccessRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "title": "Context",
+            "type": "string"
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "title": "ImpactAccessRequest",
+        "type": "object"
+      },
+      "ImpactAggregateView": {
+        "description": "一个时段内一组对象的真实计数；`known_bytes` 为空表示该拥有者无法度量字节。",
+        "properties": {
+          "earliest": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest"
+          },
+          "known_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Known Bytes"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "objects": {
+            "title": "Objects",
+            "type": "integer"
+          },
+          "unknown_size_objects": {
+            "title": "Unknown Size Objects",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "objects",
+          "known_bytes",
+          "unknown_size_objects",
+          "earliest",
+          "latest"
+        ],
+        "title": "ImpactAggregateView",
         "type": "object"
       },
       "ImportStatus": {
@@ -3976,6 +5183,40 @@
         "title": "ItemPage[ArtifactView]",
         "type": "object"
       },
+      "ItemPage_AugmentationView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AugmentationView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[AugmentationView]",
+        "type": "object"
+      },
       "ItemPage_CameraMediaView_": {
         "properties": {
           "items": {
@@ -4144,6 +5385,40 @@
           "total"
         ],
         "title": "ItemPage[DatasetView]",
+        "type": "object"
+      },
+      "ItemPage_DdmTrainingCommandView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DdmTrainingCommandView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[DdmTrainingCommandView]",
         "type": "object"
       },
       "ItemPage_InferenceBackendView_": {
@@ -4811,6 +6086,230 @@
         "title": "NewUser",
         "type": "object"
       },
+      "NormalHandoverCreation": {
+        "additionalProperties": false,
+        "description": "正常交权请求冻结的工位与双方主机身份。",
+        "properties": {
+          "from_host_id": {
+            "format": "uuid",
+            "title": "From Host Id",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "to_host_id": {
+            "format": "uuid",
+            "title": "To Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "from_host_id",
+          "to_host_id"
+        ],
+        "title": "NormalHandoverCreation",
+        "type": "object"
+      },
+      "NormalHandoverStatus": {
+        "description": "正常交权请求的持久状态；确认只表示旧机已安全停写。",
+        "enum": [
+          "pending",
+          "confirmed",
+          "cancelled",
+          "timed_out",
+          "failed"
+        ],
+        "title": "NormalHandoverStatus",
+        "type": "string"
+      },
+      "NormalHandoverView": {
+        "description": "正常交权状态及其冻结租约/命令身份。",
+        "properties": {
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At"
+          },
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed At"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Detail"
+          },
+          "from_host_id": {
+            "format": "uuid",
+            "title": "From Host Id",
+            "type": "string"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "granted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted At"
+          },
+          "granted_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted By"
+          },
+          "handover_id": {
+            "format": "uuid",
+            "title": "Handover Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "new_grant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Grant Id"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "requested_by": {
+            "format": "uuid",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NormalHandoverStatus"
+          },
+          "timed_out_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timed Out At"
+          },
+          "to_host_id": {
+            "format": "uuid",
+            "title": "To Host Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handover_id",
+          "station_id",
+          "from_host_id",
+          "to_host_id",
+          "grant_id",
+          "command_id",
+          "idempotency_key",
+          "requested_by",
+          "requested_at",
+          "expires_at",
+          "status",
+          "confirmed_at",
+          "cancelled_at",
+          "timed_out_at",
+          "failed_at",
+          "failure_code",
+          "failure_detail"
+        ],
+        "title": "NormalHandoverView",
+        "type": "object"
+      },
       "OrderingMode": {
         "description": "模板是否要求动作严格按步骤顺序出现。",
         "enum": [
@@ -4860,7 +6359,9 @@
         "description": "推理机从中心领取的设备命令类型。",
         "enum": [
           "test_connector_connection",
-          "reclip_evidence"
+          "reclip_evidence",
+          "stop_execution_handover",
+          "control_recording_compression"
         ],
         "title": "PendingCommandType",
         "type": "string"
@@ -5266,6 +6767,7 @@
           "ACTION_ID_UNKNOWN",
           "INFERENCE_HOST_DOWN",
           "RUN_INTERRUPTED",
+          "STORAGE_UNAVAILABLE",
           "IO_SIGNAL_LOST",
           "IO_TIME_UNALIGNED",
           "MISSED_STEP",
@@ -5286,6 +6788,7 @@
           "MISSED_STEP": "缺少必做步骤",
           "OUT_OF_ORDER": "步骤顺序错误",
           "RUN_INTERRUPTED": "运行被中断。配置切换、进程重启、本地暂停或显式终止。",
+          "STORAGE_UNAVAILABLE": "边缘存储不可用或超过安全水位",
           "STREAM_LOST": "观测流中断",
           "TIMESTAMP_DISCONTINUITY": "时间轴不连续",
           "WRONG_STEP": "出现了错误步骤"
@@ -5347,6 +6850,47 @@
         "title": "RegisterVlmCandidateInput",
         "type": "object"
       },
+      "RequestAugmentationInput": {
+        "additionalProperties": false,
+        "description": "只接受已登记标注执行身份，不接受客户端路径、URL 或基座身份。",
+        "properties": {
+          "annotation_execution_id": {
+            "format": "uuid",
+            "title": "Annotation Execution Id",
+            "type": "string"
+          },
+          "frame_drop_iterations": {
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Frame Drop Iterations",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "annotation_execution_id",
+          "frame_drop_iterations"
+        ],
+        "title": "RequestAugmentationInput",
+        "type": "object"
+      },
+      "RequestDdmTrainingCommandInput": {
+        "additionalProperties": false,
+        "description": "受理一条 DDM 训练命令所需的独立训练/验证来源。",
+        "properties": {
+          "training": {
+            "$ref": "#/components/schemas/DdmInputSelectionInput"
+          },
+          "validation": {
+            "$ref": "#/components/schemas/DdmInputSelectionInput"
+          }
+        },
+        "required": [
+          "training",
+          "validation"
+        ],
+        "title": "RequestDdmTrainingCommandInput",
+        "type": "object"
+      },
       "RequestVideoUploadInput": {
         "additionalProperties": false,
         "description": "申请上传时提交的声明；不接受对象 URL 或客户端媒体事实。\n\n`declared_sha256` 是可选期望；中心从流式字节计算并登记权威摘要，因此客户端不必\n为申请上传而预读整段视频。",
@@ -5388,6 +6932,22 @@
           "declared_size"
         ],
         "title": "RequestVideoUploadInput",
+        "type": "object"
+      },
+      "RequestVlmTrainingCommandInput": {
+        "additionalProperties": false,
+        "description": "受理一条 VLM 训练命令所需的已通过用途检查。",
+        "properties": {
+          "usage_check_id": {
+            "format": "uuid",
+            "title": "Usage Check Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "usage_check_id"
+        ],
+        "title": "RequestVlmTrainingCommandInput",
         "type": "object"
       },
       "RequestedStatus": {
@@ -5441,6 +7001,298 @@
           "unknown"
         ],
         "title": "ResourceSummary",
+        "type": "object"
+      },
+      "RetentionCategory": {
+        "enum": [
+          "pass",
+          "fail",
+          "indeterminate"
+        ],
+        "title": "RetentionCategory",
+        "type": "string"
+      },
+      "RetentionFactOwner": {
+        "description": "字段影响事实的拥有者；缺任一拥有者的当前事实即估算不完整。",
+        "enum": [
+          "evidence",
+          "monitor",
+          "edge"
+        ],
+        "title": "RetentionFactOwner",
+        "type": "string"
+      },
+      "RetentionFieldImpactView": {
+        "description": "单个保留字段的影响：有真实计数，或明确不可估算的原因；两者恰有其一。",
+        "properties": {
+          "bytes_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes Basis"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetentionCategory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exposed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImpactAggregateView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exposed_from": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposed From"
+          },
+          "exposed_to": {
+            "format": "date-time",
+            "title": "Exposed To",
+            "type": "string"
+          },
+          "field": {
+            "$ref": "#/components/schemas/RetentionImpactField"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/RetentionFactOwner"
+          },
+          "protected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImpactAggregateView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "removes_objects": {
+            "title": "Removes Objects",
+            "type": "boolean"
+          },
+          "savings_unknown": {
+            "title": "Savings Unknown",
+            "type": "boolean"
+          },
+          "source_configurations": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeImpactSourceView"
+            },
+            "title": "Source Configurations",
+            "type": "array"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "field",
+          "owner",
+          "category",
+          "removes_objects",
+          "exposed_from",
+          "exposed_to",
+          "exposed",
+          "protected",
+          "unavailable_reason",
+          "savings_unknown",
+          "bytes_basis",
+          "source_configurations"
+        ],
+        "title": "RetentionFieldImpactView",
+        "type": "object"
+      },
+      "RetentionImpactEstimateView": {
+        "description": "一次保留变更的逐字段影响估算；`complete` 为假时不得确认。",
+        "properties": {
+          "baseline_revision": {
+            "title": "Baseline Revision",
+            "type": "integer"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "estimate_token": {
+            "title": "Estimate Token",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/RetentionFieldImpactView"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "incomplete_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incomplete Reasons",
+            "type": "array"
+          },
+          "proposed": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          },
+          "reference_time": {
+            "format": "date-time",
+            "title": "Reference Time",
+            "type": "string"
+          },
+          "station_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Station Id"
+          }
+        },
+        "required": [
+          "baseline_revision",
+          "proposed",
+          "station_id",
+          "fields",
+          "reference_time",
+          "incomplete_reasons",
+          "complete",
+          "estimate_token"
+        ],
+        "title": "RetentionImpactEstimateView",
+        "type": "object"
+      },
+      "RetentionImpactField": {
+        "description": "一次保留变更影响估算逐字段覆盖的保留字段；八个字段各有一个拥有者口径。",
+        "enum": [
+          "evidence_pass",
+          "evidence_fail",
+          "evidence_indeterminate",
+          "record_detail",
+          "record_compression_age",
+          "record_aggregate_age",
+          "disposal",
+          "local_reported"
+        ],
+        "title": "RetentionImpactField",
+        "type": "string"
+      },
+      "RetentionMode": {
+        "enum": [
+          "unset",
+          "duration",
+          "permanent",
+          "discard"
+        ],
+        "title": "RetentionMode",
+        "type": "string"
+      },
+      "RetentionPolicyMode": {
+        "description": "工位保留组的整组来源；与运行参数同一覆盖模式（§5.19）。",
+        "enum": [
+          "follow_global",
+          "custom"
+        ],
+        "title": "RetentionPolicyMode",
+        "type": "string"
+      },
+      "RetentionPolicyView": {
+        "description": "完整一组保留参数；缺字段或不合法的一律拒绝。",
+        "properties": {
+          "disposal": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "evidence_fail": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "evidence_indeterminate": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "evidence_pass": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "local_reported": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "record_aggregate_age": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "record_compression_age": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          },
+          "record_detail": {
+            "$ref": "#/components/schemas/RetentionRuleView"
+          }
+        },
+        "required": [
+          "evidence_pass",
+          "evidence_fail",
+          "evidence_indeterminate",
+          "record_detail",
+          "record_compression_age",
+          "record_aggregate_age",
+          "disposal",
+          "local_reported"
+        ],
+        "title": "RetentionPolicyView",
+        "type": "object"
+      },
+      "RetentionRuleView": {
+        "description": "一条保留规则的 wire 形状；生效组不出现 `unset`。",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/RetentionMode"
+          },
+          "seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "RetentionRuleView",
         "type": "object"
       },
       "RetryMode": {
@@ -5710,6 +7562,71 @@
           "name"
         ],
         "title": "StationConfiguration",
+        "type": "object"
+      },
+      "StationRetentionUpdate": {
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/RetentionPolicyMode"
+          },
+          "overrides": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetentionPolicyView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "StationRetentionUpdate",
+        "type": "object"
+      },
+      "StationRetentionView": {
+        "description": "工位保留的默认组、覆盖组与唯一生效组；不逐字段混合。",
+        "properties": {
+          "default": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/RetentionPolicyView"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/RetentionPolicyMode"
+          },
+          "overrides": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetentionPolicyView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "station_id": {
+            "format": "uuid",
+            "title": "Station Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "revision",
+          "mode",
+          "default",
+          "overrides",
+          "effective"
+        ],
+        "title": "StationRetentionView",
         "type": "object"
       },
       "StationStatus": {
@@ -10675,6 +12592,355 @@
         "x-required-permission": "device.connector.edit"
       }
     },
+    "/api/v1/device-commands/compression/next": {
+      "get": {
+        "operationId": "claimRecordingCompression",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompressionClaimView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "204": {
+            "description": "No pending command"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host authentication failed"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host is not allowed to access this command"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Claim",
+        "tags": [
+          "device"
+        ]
+      }
+    },
+    "/api/v1/device-commands/compression/{command_id}/result": {
+      "post": {
+        "operationId": "completeRecordingCompression",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Command-Claim-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "X-Command-Claim-Token",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompressionObservation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompressionCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host authentication failed"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host is not allowed to access this command"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Complete",
+        "tags": [
+          "device"
+        ]
+      }
+    },
+    "/api/v1/device-commands/execution-handover/next": {
+      "get": {
+        "description": "只允许旧机按明确 command type 领取正常交权停机命令。",
+        "operationId": "claimNextExecutionHandoverCommand",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "204": {
+            "description": "No normal handover command is pending"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host authentication failed"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution handover state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Claim Next Execution Handover",
+        "tags": [
+          "execution"
+        ]
+      }
+    },
     "/api/v1/device-commands/next": {
       "get": {
         "description": "按已验证的主机身份领取一条命令；无命令返回 204。",
@@ -11041,6 +13307,169 @@
           "device"
         ],
         "x-required-permission": "device.connector.view"
+      }
+    },
+    "/api/v1/device-commands/{command_id}/execution-handover-result": {
+      "post": {
+        "description": "认证旧机回报，在同一事务内更新请求与命令终态。",
+        "operationId": "completeExecutionHandoverCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Command-Claim-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "X-Command-Claim-Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Completeexecutionhandovercommand",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Inference host authentication failed"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution handover state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Complete Execution Handover",
+        "tags": [
+          "execution"
+        ]
       }
     },
     "/api/v1/device-commands/{command_id}/reclip-result": {
@@ -11726,6 +14155,133 @@
         ]
       }
     },
+    "/api/v1/evidence/{evidence_id}/review-holds": {
+      "post": {
+        "description": "进入在审保护：登记本人在该证据上的持久复核占用，删除认领在此之后被拒。",
+        "operationId": "beginEvidenceReview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceReviewHoldBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceReviewHoldRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Begin Review Hold",
+        "tags": [
+          "evidence"
+        ],
+        "x-required-permission": [
+          "evidence.evidence.view",
+          "evidence.review.edit"
+        ]
+      }
+    },
+    "/api/v1/evidence/{evidence_id}/review-holds/cancel": {
+      "post": {
+        "description": "退出在审保护：只结束当前人自己的占用，其他人或已结案的占用不受影响。",
+        "operationId": "cancelEvidenceReview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceReviewCancelBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Cancel Review Hold",
+        "tags": [
+          "evidence"
+        ],
+        "x-required-permission": [
+          "evidence.evidence.view",
+          "evidence.review.edit"
+        ]
+      }
+    },
     "/api/v1/evidence/{evidence_id}/reviews": {
       "get": {
         "operationId": "readEvidenceReviews",
@@ -12178,6 +14734,386 @@
           }
         },
         "summary": "Confirm",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/normal-handovers": {
+      "post": {
+        "description": "建立正常交权请求；中心收到请求不等于旧机已经停写。",
+        "operationId": "createNormalHandover",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NormalHandoverCreation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalHandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Request invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Create Normal",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/normal-handovers/{handover_id}": {
+      "get": {
+        "description": "读取并在需要时持久记录超时状态。",
+        "operationId": "readNormalHandover",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "handover_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Handover Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalHandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Normal",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/normal-handovers/{handover_id}/cancellation": {
+      "post": {
+        "operationId": "cancelNormalHandover",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "handover_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Handover Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalHandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Cancel Normal",
+        "tags": [
+          "execution"
+        ],
+        "x-required-permission": "execution.handover.edit"
+      }
+    },
+    "/api/v1/execution/normal-handovers/{handover_id}/grant": {
+      "post": {
+        "description": "仅消费当前已确认停写请求；重复提交返回已冻结的新权身份。",
+        "operationId": "grantNormalHandover",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "handover_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Handover Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NormalHandoverView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Execution state conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Grant Normal",
         "tags": [
           "execution"
         ],
@@ -13933,6 +16869,225 @@
           "device.inference_host.view",
           "device.camera.view"
         ]
+      }
+    },
+    "/api/v1/inference-hosts/{host_id}/recording-compression/commands": {
+      "post": {
+        "operationId": "enqueueRecordingCompression",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompressionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompressionCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Enqueue",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.inference_host.edit"
+      }
+    },
+    "/api/v1/inference-hosts/{host_id}/recording-compression/commands/{command_id}": {
+      "get": {
+        "operationId": "readRecordingCompressionCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompressionCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device record not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Device configuration conflict"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Command",
+        "tags": [
+          "device"
+        ],
+        "x-required-permission": "device.inference_host.view"
       }
     },
     "/api/v1/inference-hosts/{host_id}/status": {
@@ -16227,6 +19382,973 @@
           "device"
         ],
         "x-required-permission": "device.point.edit"
+      }
+    },
+    "/api/v1/retention/evidence-deletion-claims": {
+      "post": {
+        "description": "为一批候选引用判定删除资格；``eligible`` 的条目附带短期票据。",
+        "operationId": "claimEvidenceDeletion",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Claim Deletion Eligibility",
+        "tags": [
+          "retention"
+        ]
+      }
+    },
+    "/api/v1/retention/evidence-deletion-claims/result": {
+      "post": {
+        "description": "把来源机的终局反馈结案为认领状态；重复同一反馈按同一状态幂等返回。",
+        "operationId": "reportEvidenceDeletionResult",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Report Deletion Result",
+        "tags": [
+          "retention"
+        ]
+      }
+    },
+    "/api/v1/retention/evidence-deletion-claims/verify": {
+      "post": {
+        "description": "删除前用票据重新校验同一条引用；只有仍为当前事实的认领才继续放行。",
+        "operationId": "verifyEvidenceDeletion",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Inference-Host-ID",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "X-Inference-Host-Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Timestamp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Timestamp"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Nonce",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Nonce"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Inference-Host-Signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Inference-Host-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Verify Deletion Eligibility",
+        "tags": [
+          "retention"
+        ]
+      }
+    },
+    "/api/v1/retention/policy": {
+      "get": {
+        "description": "读取全局默认保留策略；尚未持久化时是代码默认值，不写库。",
+        "operationId": "readRetentionPolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalRetentionPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read The Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.view"
+      },
+      "put": {
+        "description": "整组替换全局默认策略；只改变后续回收依据，不同步删除任何数据。\n\n必须携带来自影响估算的确认令牌；不完整、基准/目标/计数变化都会使令牌无效或禁止确认。",
+        "operationId": "updateRetentionPolicy",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "If-Match",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Retention-Estimate",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retention-Estimate"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalRetentionPolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalRetentionPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Retention policy conflict, stale estimate or incomplete estimate"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Update The Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.edit"
+      }
+    },
+    "/api/v1/retention/policy/impact-estimate": {
+      "post": {
+        "description": "逐字段按数据拥有者的真实事实估算新暴露的对象/空间/时刻；只读，不写策略。\n\n全局变更只影响整组跟随全局的工位：带自定义整组的工位不在本次影响范围内。",
+        "operationId": "estimateRetentionPolicyImpact",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalRetentionPolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionImpactEstimateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Retention policy group is invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Estimate Retention Policy Impact",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.edit"
+      }
+    },
+    "/api/v1/retention/reported-impact/access-check": {
+      "post": {
+        "operationId": "checkRetentionReportedImpactAccess",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImpactAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Check Impact Access",
+        "tags": [
+          "retention"
+        ]
+      }
+    },
+    "/api/v1/retention/stations/{station_id}": {
+      "get": {
+        "description": "读取全局默认、工位覆盖与唯一生效组；只读，不写入。",
+        "operationId": "readStationRetention",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationRetentionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Station Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.view"
+      },
+      "put": {
+        "description": "整组替换工位保留覆盖；If-Match 是该工位覆盖记录版本，0 表示首次建立。\n\n必须先做本工位影响估算并带回确认令牌；不完整、基准/目标/计数变化都会使令牌无效或禁止确认。",
+        "operationId": "updateStationRetention",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "If-Match",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Retention-Estimate",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retention-Estimate"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StationRetentionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StationRetentionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Retention policy conflict, stale estimate or incomplete estimate"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Update Station Retention Policy",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.edit"
+      }
+    },
+    "/api/v1/retention/stations/{station_id}/impact-estimate": {
+      "post": {
+        "description": "逐字段估算替换该工位覆盖后新暴露的本工位对象/空间/时刻；只读，不写记录。",
+        "operationId": "estimateStationRetentionImpact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "station_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Station Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StationRetentionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionImpactEstimateView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Authentication required or session invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Permission denied or CSRF token invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Station not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Retention policy group is invalid"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Estimate Station Retention Impact",
+        "tags": [
+          "retention"
+        ],
+        "x-required-permission": "retention.policy.edit"
       }
     },
     "/api/v1/stations": {
@@ -19462,6 +23584,1036 @@
         "x-required-permission": "dataset.dataset.view"
       }
     },
+    "/api/v1/training-datasets/{dataset_id}/augmentation-commands": {
+      "get": {
+        "operationId": "listDatasetAugmentations",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_AugmentationView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集或增强命令不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "输入、幂等键或命令状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "List Dataset Augmentations",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      },
+      "post": {
+        "operationId": "requestDatasetAugmentation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestAugmentationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AugmentationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集或增强命令不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "输入、幂等键或命令状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Request Dataset Augmentation",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}": {
+      "get": {
+        "operationId": "readDatasetAugmentation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AugmentationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集或增强命令不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "输入、幂等键或命令状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Dataset Augmentation",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}/cancel": {
+      "post": {
+        "operationId": "cancelPendingDatasetAugmentation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AugmentationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集或增强命令不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "输入、幂等键或命令状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Cancel Pending Dataset Augmentation",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/ddm-training-commands": {
+      "get": {
+        "description": "重新打开页面后按数据集恢复原命令，不依赖页面内缓存。",
+        "operationId": "listDdmTrainingCommands",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_DdmTrainingCommandView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "List The Ddm Training Commands",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      },
+      "post": {
+        "description": "受理一条 DDM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。",
+        "operationId": "requestDdmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestDdmTrainingCommandInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandAcceptedView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Request A Ddm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}": {
+      "get": {
+        "operationId": "readDdmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Ddm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/cancel": {
+      "post": {
+        "description": "仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。",
+        "operationId": "cancelDdmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Cancel A Ddm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/ddm-training-commands/{command_id}/result": {
+      "get": {
+        "description": "返回结果登记事实与已授权数据通道地址；不在此中转大体积字节。",
+        "operationId": "readDdmTrainingResult",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingResultView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Ddm Training Result",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
     "/api/v1/training-datasets/{dataset_id}/members": {
       "get": {
         "operationId": "listDatasetMembers",
@@ -21589,6 +26741,600 @@
           }
         },
         "summary": "Read A Vlm Candidate",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-training-commands": {
+      "get": {
+        "description": "重新打开页面后按数据集恢复原 VLM 命令，不依赖页面内缓存。",
+        "operationId": "listVlmTrainingCommands",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_DdmTrainingCommandView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "List The Vlm Training Commands",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      },
+      "post": {
+        "description": "受理一条 VLM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。",
+        "operationId": "requestVlmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestVlmTrainingCommandInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandAcceptedView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Request A Vlm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}": {
+      "get": {
+        "operationId": "readVlmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Vlm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/cancel": {
+      "post": {
+        "description": "未派发命令直接取消；已派发只记录取消请求，响应文案不证明进程已停止。",
+        "operationId": "cancelVlmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Cancel A Vlm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/result": {
+      "get": {
+        "description": "返回 VLM 结果登记事实与已授权数据通道地址；不在此中转大体积字节。",
+        "operationId": "readVlmTrainingResult",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingResultView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Vlm Training Result",
         "tags": [
           "dataset"
         ],

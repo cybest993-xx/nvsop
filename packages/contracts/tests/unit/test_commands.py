@@ -9,6 +9,10 @@ from nvsop_contracts import (
     ConnectionTestCommand,
     ConnectionTestOutcome,
     ConnectionTestResult,
+    ExecutionHandoverClaim,
+    ExecutionHandoverCommand,
+    ExecutionHandoverOutcome,
+    ExecutionHandoverResult,
     ReclipEvidenceClaim,
     ReclipEvidenceCommand,
     ReclipEvidenceResult,
@@ -18,6 +22,12 @@ from nvsop_contracts import (
     connection_test_command_to_wire,
     connection_test_result_from_wire,
     connection_test_result_to_wire,
+    execution_handover_claim_from_wire,
+    execution_handover_claim_to_wire,
+    execution_handover_command_from_wire,
+    execution_handover_command_to_wire,
+    execution_handover_result_from_wire,
+    execution_handover_result_to_wire,
     reclip_evidence_claim_from_wire,
     reclip_evidence_claim_to_wire,
     reclip_evidence_command_from_wire,
@@ -132,6 +142,58 @@ class DelegatedConnectionContractTest(unittest.TestCase):
         document["claim_token"] = ""
         with self.assertRaises(ValueError):
             connection_test_claim_from_wire(document)
+
+
+class ExecutionHandoverContractTest(unittest.TestCase):
+    def command(self) -> ExecutionHandoverCommand:
+        return ExecutionHandoverCommand(
+            command_id="command-1",
+            handover_id="handover-1",
+            station_id="station-1",
+            from_host_id="host-old",
+            to_host_id="host-new",
+            grant_id="grant-1",
+        )
+
+    def test_command_and_result_round_trip_as_strict_shapes(self) -> None:
+        command = self.command()
+        claim = ExecutionHandoverClaim(
+            command=command,
+            claim_token="claim-1",
+            lease_expires_at="2026-09-08T08:01:00Z",
+        )
+        result = ExecutionHandoverResult(
+            handover_id="handover-1",
+            grant_id="grant-1",
+            outcome=ExecutionHandoverOutcome.CONFIRMED,
+        )
+
+        self.assertEqual(
+            command,
+            execution_handover_command_from_wire(execution_handover_command_to_wire(command)),
+        )
+        self.assertEqual(
+            claim, execution_handover_claim_from_wire(execution_handover_claim_to_wire(claim))
+        )
+        self.assertEqual(
+            result, execution_handover_result_from_wire(execution_handover_result_to_wire(result))
+        )
+
+    def test_unknown_fields_and_stale_identity_are_rejected(self) -> None:
+        document = execution_handover_command_to_wire(self.command())
+        with self.assertRaises(ValueError):
+            execution_handover_command_from_wire({**document, "request_id": "other"})
+        with self.assertRaises(ValueError):
+            execution_handover_result_from_wire(
+                {
+                    "handover_id": "handover-1",
+                    "grant_id": "grant-1",
+                    "outcome": "confirmed",
+                    "detail": None,
+                    "failure_code": None,
+                    "extra": True,
+                }
+            )
 
 
 class ReclipEvidenceContractTest(unittest.TestCase):

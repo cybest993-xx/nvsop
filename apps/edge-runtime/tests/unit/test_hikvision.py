@@ -21,7 +21,7 @@ from __future__ import annotations
 import unittest
 
 from harness import measured_capability
-from nvsop_contracts import Capability, Unverified
+from nvsop_contracts import Capability, TimestampSource, Unverified
 
 from edge_runtime.connectors.hikvision import (
     CANDIDATE_PROFILE,
@@ -48,7 +48,7 @@ from edge_runtime.connectors.port import (
     Written,
 )
 from edge_runtime.judgment.model import HostInstant
-from edge_runtime.supervisor.inputs import TimeAlignment
+from edge_runtime.supervisor.inputs import ClockEvidence
 
 ARRIVAL = InputPoint(label="工件到位", address="1")
 INTERLOCK = OutputPoint(label="停线联锁", address="1")
@@ -148,7 +148,11 @@ class ReadingAnInputPointTest(unittest.TestCase):
         transport = FakeTransport(answer=Response(body=ACTIVE_STATUS))
 
         self.assertEqual(
-            Reading(state=PointState.ACTIVE, at=HostInstant(NOW), alignment=TimeAlignment.ALIGNED),
+            Reading(
+                state=PointState.ACTIVE,
+                at=HostInstant(NOW),
+                clock=ClockEvidence.host_receipt(),
+            ),
             connector(transport).read(ARRIVAL, timeout=TIMEOUT),
             "host receipt is this adapter's declared timestamp source, so the instant is the "
             "monotonic reading taken when the answer arrived, and it is aligned by "
@@ -160,9 +164,57 @@ class ReadingAnInputPointTest(unittest.TestCase):
 
         self.assertEqual(
             Reading(
-                state=PointState.INACTIVE, at=HostInstant(NOW), alignment=TimeAlignment.ALIGNED
+                state=PointState.INACTIVE,
+                at=HostInstant(NOW),
+                clock=ClockEvidence.host_receipt(),
             ),
             connector(transport).read(ARRIVAL, timeout=TIMEOUT),
+        )
+
+
+class OnlyAHostReceiptReadingCanBePlacedOnTheTimelineTest(unittest.TestCase):
+    """§5.8: 时间戳来源决定时间锚定误差如何计入 `IO_TIME_UNALIGNED` 阈值.
+
+    A host receipt is aligned by construction within the declared delivery delay, which the
+    binding check already counts against the role's budget — the base `ReadingAnInputPointTest`
+    pins that arm. Everything else falls to `UNALIGNED`, because placing those readings needs
+    something this polling adapter never holds: a device clock read here carries a level and no
+    device time, so the offset onto the host timeline is unavailable. §5.8 makes the
+    unavailable case indeterminate rather than failing, so `UNALIGNED` — which judgment reads
+    as `IO_TIME_UNALIGNED` — is the answer, never a claimed alignment.
+    """
+
+    def test_a_device_clock_reading_cannot_be_placed_on_the_timeline(self) -> None:
+        transport = FakeTransport(answer=Response(body=ACTIVE_STATUS))
+
+        self.assertEqual(
+            Reading(
+                state=PointState.ACTIVE,
+                at=HostInstant(NOW),
+                clock=ClockEvidence.unverified("device_clock"),
+            ),
+            connector(
+                transport,
+                capability=measured_capability(timestamps=TimestampSource.DEVICE_CLOCK),
+            ).read(ARRIVAL, timeout=TIMEOUT),
+            "the level itself is still reported — what is withheld is the claim that it can "
+            "be placed on the video timeline, and a signal that cannot be placed may not "
+            "produce a failing verdict (§5.8, §5.2)",
+        )
+
+    def test_an_unverified_capability_cannot_claim_alignment(self) -> None:
+        transport = FakeTransport(answer=Response(body=ACTIVE_STATUS))
+
+        self.assertEqual(
+            Reading(
+                state=PointState.ACTIVE,
+                at=HostInstant(NOW),
+                clock=ClockEvidence.unverified("unknown"),
+            ),
+            connector(transport, capability=Unverified()).read(ARRIVAL, timeout=TIMEOUT),
+            "the fall-through is fail-closed rather than exhaustive-by-accident: a capability "
+            "with no measured delivery delay cannot bound the error a host-receipt reading is "
+            "aligned against, so nothing here may answer `ALIGNED` (§5.21: 未验证能力保守拒绝)",
         )
 
 
@@ -348,7 +400,11 @@ class TheAdapterHoldsNoWireShapeOfItsOwnTest(unittest.TestCase):
         result = connector(transport, profile=OTHER_FIRMWARE).read(ARRIVAL, timeout=TIMEOUT)
 
         self.assertEqual(
-            Reading(state=PointState.ACTIVE, at=HostInstant(NOW), alignment=TimeAlignment.ALIGNED),
+            Reading(
+                state=PointState.ACTIVE,
+                at=HostInstant(NOW),
+                clock=ClockEvidence.host_receipt(),
+            ),
             result,
         )
         self.assertEqual([("GET", "/ISAPI/IO/inputs/1", None, TIMEOUT)], transport.calls)

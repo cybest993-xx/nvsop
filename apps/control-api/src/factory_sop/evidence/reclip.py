@@ -96,7 +96,11 @@ def create_reclip_request(
         ):
             return existing
         raise EvidenceReclipRefusedError(409, "reclip_request_conflict")
-    reference = evidence.find(evidence_id)
+    # 与删除认领的创建同序锁定引用行：存在未结案认领时不再追加新引用。
+    locked = evidence.lock(evidence_id)
+    if locked.pending_claim:
+        raise EvidenceReclipRefusedError(409, "evidence_deletion_claimed")
+    reference = locked.reference
     if reference is None:
         raise EvidenceReclipRefusedError(404, "evidence_unregistered")
     registration = reference.registration

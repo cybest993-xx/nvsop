@@ -5,14 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import suppress
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import Event, Thread
-from time import time
+from time import monotonic, sleep, time
 from typing import cast
 from unittest.mock import patch
 
@@ -22,6 +25,7 @@ from edge_runtime.evidence_media import (
     EvidenceMediaConfiguration,
     EvidenceMediaError,
     EvidenceMediaWorker,
+    recording_material_access,
     recording_segment_generation,
     slice_evidence,
 )
@@ -146,6 +150,246 @@ class RecordingCompressionTest(unittest.TestCase):
             recording_timezone=None,
         )
 
+    def wait_state(self, worker: RecordingCompressionWorker, state: str) -> None:
+        deadline = monotonic() + 10
+        while worker.status().state != state and monotonic() < deadline:
+            sleep(0.01)
+        self.assertEqual(worker.status().state, state)
+
+    def test_pause_confirms_real_process_stop_then_resumes_throttled_archive(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        worker = RecordingCompressionWorker(
+            configuration=replace(self.configuration(), readrate=0.5, timeout_seconds=4.0),
+            interval=1.0,
+        )
+        results = []
+        thread = Thread(target=lambda: results.append(worker.drain()))
+        started = monotonic()
+        thread.start()
+        try:
+            self.wait_state(worker, "running")
+            pid = worker.status().pid
+            assert pid is not None
+            worker.pause()
+            worker.pause()
+            self.wait_state(worker, "paused")
+            self.assertIn("T (stopped)", Path(f"/proc/{pid}/status").read_text())
+            self.assertEqual(digest(source), original)
+            self.assertIsNone(validated_candidate(source))
+            # 同目录的第二个任务不能越过暂停占用, 重复 drain 也不产生第二个子进程。
+            self.assertEqual(worker.drain().created, 0)
+            other = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+            self.assertEqual(other.drain().created, 0)
+            paused_at = monotonic()
+            sleep(4.2)  # 超过命令超时, 但暂停不消耗实际执行预算。
+            paused_for = monotonic() - paused_at
+            worker.resume()
+            worker.resume()
+            thread.join(15)
+            self.assertFalse(thread.is_alive())
+            self.assertGreater(monotonic() - started - paused_for, 1.5)
+            self.assertEqual((results[0].replaced, results[0].failed), (1, 0))
+            self.assertEqual(recording_segment_generation(source), "compressed")
+            self.assertEqual(worker.status().state, "idle")
+        finally:
+            worker.abort()
+            thread.join(5)
+
+    def test_abort_reaps_stopped_process_preserves_source_and_restart_resumes(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        worker = RecordingCompressionWorker(
+            configuration=replace(self.configuration(), readrate=0.5), interval=1.0
+        )
+        results = []
+        thread = Thread(target=lambda: results.append(worker.drain()))
+        thread.start()
+        try:
+            self.wait_state(worker, "running")
+            worker.pause()
+            self.wait_state(worker, "paused")
+            pid = worker.status().pid
+            assert pid is not None
+            worker.abort()
+            worker.abort()
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertFalse(Path(f"/proc/{pid}").exists())
+            self.assertEqual(worker.status().state, "aborted")
+            self.assertEqual((results[0].replaced, results[0].failed), (0, 0))
+            self.assertEqual(digest(source), original)
+            self.assertEqual(list(directory.glob(".*.candidate.mp4")), [])
+            self.assertIsNone(validated_candidate(source))
+            restarted = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+            self.assertEqual(restarted.status().state, "aborted")
+            self.assertEqual(restarted.drain().created, 0)
+            # 崩溃遗留半成品不能成为安全候选; 只在原件已确认后重做。
+            partial = directory / f".{source.name}.orphan.candidate.mp4"
+            partial.write_bytes(b"incomplete")
+            restarted.resume()
+            self.assertEqual(restarted.drain().replaced, 1)
+            self.assertFalse(partial.exists())
+            self.assertEqual(recording_segment_generation(source), "compressed")
+        finally:
+            worker.abort()
+            thread.join(5)
+
+    def test_owner_crash_retains_process_occupancy_until_safe_restart(self) -> None:
+        for intent in ("run", "pause", "abort"):
+            with self.subTest(intent=intent):
+                self.recording = self.root / intent
+                self.check_owner_crash(intent)
+
+    def check_owner_crash(self, intent: str) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        marker = self.root / f"encoder-pid-{intent}"
+        script = """
+import sys
+from pathlib import Path
+from threading import Thread
+from time import sleep
+from edge_runtime.recording_compression import (
+    RecordingCompressionConfiguration, RecordingCompressionWorker,
+)
+root, marker = map(Path, sys.argv[1:])
+configuration = RecordingCompressionConfiguration(
+    root, Path('/usr/bin/ffmpeg'), Path('/usr/bin/ffprobe'),
+    3600, 2, 30, 60.0, None, readrate=0.05,
+)
+worker = RecordingCompressionWorker(configuration=configuration, interval=1.0)
+thread = Thread(target=worker.drain)
+thread.start()
+while worker.status().pid is None:
+    sleep(0.01)
+marker.write_text(str(worker.status().pid))
+thread.join()
+"""
+        owner = subprocess.Popen([sys.executable, "-c", script, str(self.recording), str(marker)])
+        encoder: int | None = None
+        try:
+            deadline = monotonic() + 10
+            while not marker.exists() and monotonic() < deadline:
+                sleep(0.01)
+            self.assertTrue(marker.exists())
+            encoder = int(marker.read_text())
+            os.killpg(encoder, signal.SIGSTOP)
+            # 模拟持久化意图后、内核确认前拥有者崩溃; 新实例不能把意图当作进程事实。
+            (self.recording / ".compression-control.json").write_text(
+                json.dumps({"version": 1, "requested": intent})
+            )
+            owner.kill()
+            owner.wait(timeout=5)
+            restarted = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+            self.assertEqual(restarted.status().state, "busy")
+            self.assertEqual(restarted.drain().created, 0)
+            self.assertEqual(restarted.status().state, "busy")
+            self.assertEqual(digest(source), original)
+            # 旧子进程的占用同时保护独立 S047 入口和 S048 替换入口。
+            self.assertEqual(compress_aged_segments(self.configuration()).created, 0)
+            os.killpg(encoder, signal.SIGKILL)
+            deadline = monotonic() + 5
+            while restarted.status().state == "busy" and monotonic() < deadline:
+                sleep(0.02)
+            restarted.resume()
+            while monotonic() < deadline:
+                result = restarted.drain()
+                if result.replaced:
+                    break
+                sleep(0.02)
+            self.assertEqual(result.replaced, 1)
+            self.assertEqual(list(directory.glob(".*.candidate.mp4")), [])
+            self.assertEqual(recording_segment_generation(source), "compressed")
+        finally:
+            if owner.poll() is None:
+                owner.kill()
+            owner.wait(timeout=5)
+            if encoder is not None:
+                with suppress(ProcessLookupError):
+                    os.killpg(encoder, signal.SIGKILL)
+
+    def test_busy_clears_after_other_owner_releases_an_empty_directory(self) -> None:
+        self.recording.mkdir()
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        with recording_material_access(self.recording, exclusive=True):
+            self.assertEqual(worker.drain().created, 0)
+            self.assertEqual(worker.status().state, "busy")
+        self.assertEqual(worker.drain().created, 0)
+        self.assertEqual(worker.status().state, "idle")
+
+    def test_recovery_keeps_only_surviving_material_when_source_is_lost_or_corrupt(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        self.assertEqual(compress_aged_segments(self.configuration()).created, 1)
+        candidate = source.with_suffix(".compressed.mp4")
+        provenance = source.with_suffix(".compressed.json")
+        partial = directory / f".{source.name}.orphan.candidate.mp4"
+        partial.write_bytes(candidate.read_bytes())
+        expected = {path: path.read_bytes() for path in (candidate, provenance, partial)}
+        source.unlink()
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        self.assertEqual(worker.drain().created, 0)
+        source.write_bytes(b"corrupt original")
+        self.assertEqual(worker.drain().failed, 1)
+        for path, content in expected.items():
+            self.assertEqual(path.read_bytes(), content)
+        decode(candidate)
+        decode(partial)
+
+    def test_shutdown_while_paused_reaps_process_and_preserves_pause_on_restart(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        worker = RecordingCompressionWorker(
+            configuration=replace(self.configuration(), readrate=0.5), interval=0.1
+        )
+        stop = Event()
+        thread = Thread(target=lambda: worker.run_forever(should_stop=stop.is_set))
+        thread.start()
+        try:
+            self.wait_state(worker, "running")
+            worker.pause()
+            self.wait_state(worker, "paused")
+            # 已完成的重复暂停仍显示 paused。
+            self.assertEqual(worker.pause().state, "paused")
+            stop.set()
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertIsNone(worker.status().pid)
+            self.assertEqual(digest(source), original)
+            restarted = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+            self.assertEqual(restarted.status().state, "paused")
+            restarted.resume()
+            self.assertEqual(restarted.drain().replaced, 1)
+        finally:
+            stop.set()
+            thread.join(5)
+
+    def test_corrupt_control_intent_is_diagnosable_and_only_explicit_resume_repairs_it(
+        self,
+    ) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        (self.recording / ".compression-control.json").write_text("{incomplete")
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        self.assertEqual(worker.status().state, "unavailable")
+        self.assertIn("unreadable", worker.status().detail or "")
+        self.assertEqual(worker.drain().created, 0)
+        self.assertEqual(digest(source), original)
+        worker.resume()
+        self.assertEqual(worker.drain().replaced, 1)
+
     def test_aged_segments_get_validated_h264_candidate_and_inner_window_stays_original(
         self,
     ) -> None:
@@ -202,7 +446,12 @@ class RecordingCompressionTest(unittest.TestCase):
         self.assertFalse(source.with_suffix(".compressed.mp4").exists())
         self.assertEqual(recording_segment_generation(source), "compressed")
         decode(source)
+        # 模拟安装后、清理前崩溃; 重启仍须回收已能确认安全的旧临时产物。
+        partial = directory / f".{source.name}.orphan.candidate.mp4"
+        partial.write_bytes(b"unfinished")
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
         second = worker.drain()
+        self.assertFalse(partial.exists())
         self.assertEqual((second.created, second.failed), (0, 0))
         self.assertEqual(digest(source), candidate.candidate_sha256)
 
@@ -420,6 +669,45 @@ class RecordingCompressionTest(unittest.TestCase):
         self.assertFalse(source.with_suffix(".compressed.mp4").exists())
         self.assertFalse(source.with_suffix(".compressed.json").exists())
 
+    def test_provenance_failure_after_source_loss_keeps_the_complete_candidate(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+
+        def fail_sync(descriptor: int) -> None:
+            source.unlink()
+            raise OSError("synthetic provenance sync failure")
+
+        with patch("os.fsync", side_effect=fail_sync):
+            self.assertEqual(compress_aged_segments(self.configuration()).failed, 1)
+        self.assertFalse(source.exists())
+        candidate = source.with_suffix(".compressed.mp4")
+        self.assertTrue(candidate.exists())
+        decode(candidate)
+
+    def test_encoder_failure_after_source_loss_preserves_its_only_output(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        encoder = self.root / "source-expiring-encoder"
+        encoder.write_text(
+            f"#!{sys.executable}\n"
+            "import subprocess, sys\n"
+            "from pathlib import Path\n"
+            "subprocess.run(['/usr/bin/ffmpeg', *sys.argv[1:]], check=True)\n"
+            "Path(sys.argv[sys.argv.index('-i') + 1]).unlink()\n"
+            "sys.exit(1)\n"
+        )
+        encoder.chmod(0o700)
+        self.assertEqual(compress_aged_segments(self.configuration(ffmpeg=encoder)).failed, 1)
+        self.assertFalse(source.exists())
+        remaining = list(directory.glob(f".{source.name}.*.candidate.mp4"))
+        self.assertEqual(len(remaining), 1)
+        decode(remaining[0])
+        worker = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
+        self.assertEqual(worker.drain().created, 0)
+        self.assertTrue(remaining[0].exists())
+
     def test_measurement_mismatch_rejects_candidate_and_keeps_original(self) -> None:
         directory = self.recording / CAMERA
         segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
@@ -470,14 +758,20 @@ class RecordingCompressionTest(unittest.TestCase):
         self.assertEqual(digest(candidate), repaired_candidate.candidate_sha256)
         self.assertNotEqual(candidate.read_bytes(), b"\0" * length)
 
-        # 留痕里的 CRF 越界同样不是可消费产物 (与配置侧共用同一条 0-51 规则)。
+        # 留痕里的 CRF 越界使代次无法证明; 保留素材并拒绝, 不能删除留痕后当原始素材重做。
         provenance = source.with_suffix(".compressed.json")
         document = json.loads(provenance.read_text(encoding="utf-8"))
         document["crf"] = 99
         provenance.write_text(json.dumps(document), encoding="utf-8")
         self.assertIsNone(validated_candidate(source))
         rejected = compress_aged_segments(self.configuration())
-        self.assertEqual((rejected.created, rejected.failed), (1, 0))
+        self.assertEqual((rejected.created, rejected.failed), (0, 1))
+        self.assertEqual(digest(source), original)
+        self.assertEqual(digest(candidate), repaired_candidate.candidate_sha256)
+        self.assertEqual(json.loads(provenance.read_text())["crf"], 99)
+        # 恢复权威留痕后仍可复用同一候选。
+        document["crf"] = CRF
+        provenance.write_text(json.dumps(document), encoding="utf-8")
         self.assertIsNotNone(validated_candidate(source))
 
         # 写入时刻被清零(归档/清洗工具)是合法事实: 不能误判成非法留痕并每轮重编码。

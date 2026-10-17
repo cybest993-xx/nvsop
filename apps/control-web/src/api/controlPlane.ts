@@ -81,6 +81,9 @@ import {
   readConnector as generatedReadConnector,
   readDatasetMember as generatedReadDatasetMember,
   readDeviceCommand as generatedReadDeviceCommand,
+  enqueueRecordingCompression as generatedEnqueueRecordingCompression,
+  readRecordingCompressionCommand as generatedReadRecordingCompressionCommand,
+  type CompressionCommandView,
   readJob as generatedReadJob,
   readPoint as generatedReadPoint,
   readSession as generatedReadSession,
@@ -1555,5 +1558,30 @@ export function updateStationRetention(
       headers: { 'If-Match': revision, 'X-Retention-Estimate': estimateToken },
       body: submitted,
     }),
+  )
+}
+
+export type { CompressionCommandView }
+
+export function enqueueRecordingCompression(
+  hostId: string,
+  action: 'inspect' | 'pause' | 'resume' | 'abort',
+  idempotencyKey: string,
+): Promise<CompressionCommandView> {
+  return execute(
+    generatedEnqueueRecordingCompression({
+      path: { host_id: hostId },
+      body: { action },
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+  )
+}
+
+export function readRecordingCompressionCommand(
+  hostId: string,
+  commandId: string,
+): Promise<CompressionCommandView> {
+  return execute(
+    generatedReadRecordingCompressionCommand({ path: { host_id: hostId, command_id: commandId } }),
   )
 }

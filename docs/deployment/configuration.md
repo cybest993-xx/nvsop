@@ -238,10 +238,15 @@ RestartSec=2
 | `recording_compression_enabled` | `false` | 是否为已出原始素材窗口的录像分段生成候选并在校验后原子替换 |
 | `recording_compression_age_seconds` | `86400` | 原始素材窗口；整段录像时间都在窗口外的分段才可压缩 |
 | `recording_compression_crf` | `28`（占位） | H.264 质量档，取值 0–51。默认档须由目标子码流实测扫档确定（§5.19 约束 5），照抄占位值不是实测结论 |
+| `recording_compression_readrate` | 未限制 | 可选有限正数，传给 FFmpeg `-readrate`，单位为每墙钟秒读取的媒体秒数；例如 `0.5` 为半倍实时读取速率。省略时保留既有速度，修改在重新装配本机运行时后生效 |
 
-默认关闭，开启前须评估编码时原件与候选并存的空间、CRF 和资源争用。后台任务以本机 ffmpeg 生成 H.264 候选、真实校验并原子替换；提交顺序、素材占用与恢复契约见[录像压缩机制](../design/mechanisms/evidence-and-retention.md#压缩录像重编码归档证据不动记录使用-timescale-原生压缩)。通过 `edge.recording_compression.summary` 的 `created` / `replaced` / `skipped` / `failed` 观察候选生成、替换、跳过和失败；`edge.recording_compression.failed` 给出分段及失败原因。编码/校验失败移除不可用候选，替换失败保留原件与有效候选；进程退出后复用留痕和实际文件继续处理。
+默认关闭，开启前须评估编码时原件与候选并存的空间、CRF 和资源争用。后台任务以本机 ffmpeg 生成 H.264 候选、真实校验并原子替换；提交顺序、素材占用与恢复契约见[录像压缩机制](../design/mechanisms/evidence-and-retention.md#压缩录像重编码归档证据不动记录使用-timescale-原生压缩)。通过 `edge.recording_compression.summary` 的 `created` / `replaced` / `skipped` / `failed` 观察候选生成、替换、跳过和失败；`edge.recording_compression.failed` 给出分段及失败原因。编码/校验失败且原件未变时仅移除本次临时产物，原件消失或变化时保留产物并告警，替换失败保留原件与有效候选；进程退出后复用留痕和实际文件继续处理。
 
-录像目录必须位于支持 Linux 目录 `flock`、同目录原子 rename 及文件/目录 `fsync` 的本机文件系统，不支持这些操作时告警而不绕过。压缩遇切片占用跳过本轮，锁随进程退出释放。保留 `<segment>.compressed.json` 与分段一起运维，不能单独清除；无法对应时拒绝切片/压缩。MediaMTX 的正常窗口回收与直连回放不参与该锁，窗口过期仍可能表现为素材缺失；压缩不改其回收策略，也不改证据文件和摘要。
+录像目录必须位于支持 Linux 目录 `flock`、同目录原子 rename 及文件/目录 `fsync` 的本机文件系统，不支持这些操作时告警而不绕过。压缩遇切片占用跳过本轮；受控子进程继承目录占用，父进程崩溃后仍活着的编码进程退出时才释放。保留 `<segment>.compressed.json` 与分段一起运维，不能单独清除；无法对应时拒绝切片/压缩。MediaMTX 的正常窗口回收与直连回放不参与该锁，窗口过期仍可能表现为素材缺失；压缩不改其回收策略，也不改证据文件和摘要。
+
+在 Web 的“工位与设备 → 录像压缩归档”选择推理机，使用“刷新实际状态”向来源机请求新观测；暂停、恢复、中止需要 `device.inference_host.view` 与 `device.inference_host.edit`，查看和刷新只需要前者。请求入队后用“查询命令结果”读取确认；页面区分等待领取、等待来源机确认与实际观测，并显示 Asia/Shanghai 观测时间。查询失败可重试；请求未确认时同一操作复用幂等键。已展示的观测带时间，不表示持续在线；中心断网时本机任务继续按最后意图运行。
+
+本机管理集成可使用运行时已有 `runtime.compression` 的 `pause()` / `resume()` / `abort()` / `status()`，不另建执行者。`pausing` / `resuming` / `aborting` 是请求态，须继续查询到内核确认的 `paused` / `running` 或任务空闲、`aborted`；暂停不消耗命令执行超时，中止会收割包括暂停中的进程。暂停与中止意图以 `0600` 原子文件 `<recording_directory>/.compression-control.json` 持久保存，正常退出不删除原件或已验证候选。重启后保留暂停/中止，显式恢复后复核现有素材：复用已验证候选，未完成编码在取得独占后重做，完整产物验证并安装后才清理旧临时文件。`busy` 表示其他执行者或遗留子进程仍占用，不能启动重复压缩；运维须先确认旧任务归属并停止旧进程，再恢复。不要单独删除该目录或占用中的素材以解除占用。控制意图文件损坏时归档显示不可用并给出诊断，自治判定继续；检查素材后显式恢复会重写有效意图。
 
 ### 本机存储分离与已上报队列裁剪
 

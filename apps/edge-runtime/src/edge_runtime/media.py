@@ -103,10 +103,11 @@ class MediaRuntimeConfiguration:
     transcode_threads: int
     recording_window_confirmation: RecordingImpact | None
     cameras: tuple[LocalMediaCamera, ...]
-    # 已老化出原始素材窗口的分段才可被压缩归档 (§5.19); 默认不启用, 启用后也只生成候选。
+    # 已老化出原始素材窗口的分段才可被压缩归档 (§5.19); 默认不启用, 启用后校验并原子归档。
     recording_compression_age_seconds: int = DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS
     recording_compression_enabled: bool = DEFAULT_RECORDING_COMPRESSION_ENABLED
     recording_compression_crf: int = DEFAULT_RECORDING_COMPRESSION_CRF
+    recording_compression_readrate: float | None = None
 
 
 class _Process(Protocol):
@@ -150,6 +151,7 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
             "recording_compression_age_seconds",
             "recording_compression_enabled",
             "recording_compression_crf",
+            "recording_compression_readrate",
         },
     )
     cameras = tuple(
@@ -231,6 +233,13 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         recording_compression_age_seconds=compression_age,
         recording_compression_enabled=compression_enabled,
         recording_compression_crf=compression_crf,
+        recording_compression_readrate=(
+            _positive_number(
+                config["recording_compression_readrate"], "recording_compression_readrate"
+            )
+            if "recording_compression_readrate" in config
+            else None
+        ),
     )
     return configuration
 
@@ -642,6 +651,10 @@ def _validate_configuration(configuration: MediaRuntimeConfiguration) -> None:
     )
     _boolean(configuration.recording_compression_enabled, "recording_compression_enabled")
     _crf_value(configuration.recording_compression_crf, "recording_compression_crf")
+    if configuration.recording_compression_readrate is not None:
+        _positive_number(
+            configuration.recording_compression_readrate, "recording_compression_readrate"
+        )
     _positive_integer(
         configuration.record_segment_duration_seconds, "record_segment_duration_seconds"
     )

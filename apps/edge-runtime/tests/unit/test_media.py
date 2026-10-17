@@ -215,11 +215,18 @@ class MediaConfigurationTest(MediaFixture):
                 "transcode_threads": 2,
                 "recording_compression_enabled": True,
                 "recording_compression_crf": 30,
+                "recording_compression_readrate": 0.5,
                 "cameras": [],
             }
         )
         self.assertTrue(parsed.recording_compression_enabled)
         self.assertEqual(30, parsed.recording_compression_crf)
+        self.assertEqual(0.5, parsed.recording_compression_readrate)
+        for rate in (0.0, -1.0, float("inf"), float("nan"), True, "0.5"):
+            with self.assertRaises(ValueError):
+                MediaRuntime(
+                    replace(self.configuration, recording_compression_readrate=cast(float, rate))
+                )
         for crf in (52, -1, True, 1.5, "30"):
             with self.assertRaises(ValueError):
                 MediaRuntime(replace(self.configuration, recording_compression_crf=cast(int, crf)))

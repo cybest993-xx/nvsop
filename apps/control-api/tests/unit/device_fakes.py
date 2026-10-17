@@ -247,6 +247,7 @@ class FakePendingCommands(PendingCommandRepository):
                 and command.result == completion.result
                 and command.result_detail == completion.result_detail
                 and command.failure_code == completion.failure_code
+                and command.compression_result == completion.compression_result
                 and command.result_credentials_configured
                 == completion.result_credentials_configured
             ):
@@ -265,6 +266,7 @@ class FakePendingCommands(PendingCommandRepository):
             result_detail=completion.result_detail,
             failure_code=completion.failure_code,
             result_credentials_configured=completion.result_credentials_configured,
+            compression_result=completion.compression_result,
             completed_at=completion.completed_at,
             updated_at=completion.completed_at,
         )

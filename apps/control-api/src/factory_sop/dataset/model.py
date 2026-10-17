@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -98,6 +98,47 @@ class ArtifactStatus(StrEnum):
     RUNNING = "running"
     AVAILABLE = "available"
     FAILED = "failed"
+
+
+class AugmentationStatus(StrEnum):
+    """unknown/bound 持续占用不安全输入；只有已证实终结才能释放。"""
+
+    PENDING = "pending"
+    RESULT_UNKNOWN = "result_unknown"
+    BOUND = "bound"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True, slots=True)
+class AugmentationCommand:
+    """首次输入不可改写，version 围栏观测与登记，不替代 PG 持久在途约束。"""
+
+    id: UUID
+    dataset_id: UUID
+    annotation_execution_id: UUID
+    label_data_id: str
+    idempotency_key: str
+    frame_drop_iterations: int
+    input_snapshot: Mapping[str, Any]
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+    status: AugmentationStatus = AugmentationStatus.PENDING
+    job_id: UUID | None = None
+    version: int = 0
+    backend_target: str | None = None
+    base_augmentation_id: str | None = None
+    dispatched_at: datetime | None = None
+    base_observation: Mapping[str, Any] = field(default_factory=dict)
+    last_observed_at: datetime | None = None
+    failure_code: str | None = None
+    result_status: str = "not_registered"
+    result_manifest: Mapping[str, Any] = field(default_factory=dict)
+    result_failure_code: str | None = None
+    cancelled_by: UUID | None = None
+    cancelled_at: datetime | None = None
 
 
 class DdmTrainingCommandStatus(StrEnum):

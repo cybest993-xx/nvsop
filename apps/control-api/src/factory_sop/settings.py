@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     annotation_context_ttl_seconds: int = Field(default=3600, gt=0, le=86400)
     # DDM 训练基座：URL、超时与基座/worker 共享的输入、结果挂载。未配置时命令保持 held，
     # 不注册可实际 start 的公开操作；配置但训练服务不可达一律记诊断，不伪装成功。
+    augmentation_backend_url: str | None = None
+    augmentation_data_root: str | None = None
+    augmentation_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     ddm_training_backend_url: str | None = None
     ddm_training_http_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     ddm_training_dataset_root: str | None = None
@@ -170,6 +173,31 @@ class Settings(BaseSettings):
                     "annotation_backend_url must be an HTTP(S) URL without userinfo, "
                     "query, or fragment"
                 )
+        if (self.augmentation_backend_url is None) != (self.augmentation_data_root is None):
+            raise ValueError(
+                "augmentation_backend_url and augmentation_data_root must be configured together"
+            )
+        if self.augmentation_backend_url is not None:
+            augmentation_url = urlsplit(self.augmentation_backend_url)
+            if (
+                augmentation_url.scheme not in {"http", "https"}
+                or not augmentation_url.hostname
+                or augmentation_url.username is not None
+                or augmentation_url.password is not None
+                or augmentation_url.query
+                or augmentation_url.fragment
+                or (augmentation_url.port is not None and not 1 <= augmentation_url.port <= 65535)
+            ):
+                raise ValueError(
+                    "augmentation_backend_url must be an HTTP(S) URL without credentials"
+                )
+            if (
+                not self.augmentation_data_root
+                or not Path(self.augmentation_data_root).is_absolute()
+            ):
+                raise ValueError("augmentation_data_root must be an absolute path")
+            if self.dataset_storage_root is None:
+                raise ValueError("augmentation requires dataset_storage_root")
         if (self.ddm_training_backend_url is None) != (self.ddm_training_dataset_root is None) or (
             self.ddm_training_backend_url is None
         ) != (self.ddm_training_results_root is None):

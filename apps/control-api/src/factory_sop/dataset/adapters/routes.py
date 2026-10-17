@@ -26,6 +26,7 @@ from pydantic import (
 from factory_sop.auth.api import Authorized, Permission, needs
 from factory_sop.dataset import model
 from factory_sop.dataset.adapters import dependencies
+from factory_sop.dataset.adapters.augmentation_routes import router as augmentation_router
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.repository import (
     DatasetRepository,
@@ -79,6 +80,7 @@ from factory_sop.problem import problem_openapi_response
 from factory_sop.responses import DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE, ItemPage
 
 router = APIRouter(prefix="/training-datasets", tags=["dataset"])
+router.include_router(augmentation_router)
 ProblemResponses: dict[int | str, dict[str, Any]] = {
     401: problem_openapi_response("需要认证或会话无效"),
     403: problem_openapi_response("权限不足或 CSRF 校验失败"),

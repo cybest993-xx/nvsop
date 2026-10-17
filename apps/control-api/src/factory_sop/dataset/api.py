@@ -123,8 +123,8 @@ class ArtifactTransactionCommitter(Protocol):
         ...
 
 
-class DatasetArtifactExecutor(Protocol):
-    """制品执行与候选清理的窄跨模块 seam。"""
+class DatasetCommandExecutor(Protocol):
+    """dataset owner 对持久 job 暴露的执行 seam。"""
 
     def execute(
         self,
@@ -136,6 +136,10 @@ class DatasetArtifactExecutor(Protocol):
     ) -> ArtifactExecutionResult:
         """执行一个已领取的制品任务。"""
         ...
+
+
+class DatasetArtifactExecutor(DatasetCommandExecutor, Protocol):
+    """制品执行与候选清理的既有公开 seam。"""
 
     def cleanup_candidates(self) -> None:
         """清理已持久化的未发布制品候选。"""

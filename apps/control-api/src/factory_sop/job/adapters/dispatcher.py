@@ -33,10 +33,12 @@ class ArqJobDispatcher:
         *,
         session_factory: sessionmaker[Session] | None = None,
         ddm_training_configured: bool = False,
+        augmentation_configured: bool = False,
     ) -> None:
         self._settings = settings
         self._session_factory = session_factory
         self._ddm_training_configured = ddm_training_configured
+        self._augmentation_configured = augmentation_configured
 
     @classmethod
     def from_settings(
@@ -63,6 +65,7 @@ class ArqJobDispatcher:
                 ssl=connection.ssl,
             ),
             session_factory=session_factory,
+            augmentation_configured=settings.augmentation_backend_url is not None,
             ddm_training_configured=(
                 settings.ddm_training_backend_url is not None
                 and settings.ddm_training_config_path is not None
@@ -73,6 +76,11 @@ class ArqJobDispatcher:
     def ddm_training_configured(self) -> bool:
         """训练配置有明确部署绑定时，扫描器才放行该类型（不在启动时读取文件）。"""
         return self._ddm_training_configured
+
+    @property
+    def augmentation_configured(self) -> bool:
+        """增强有部署绑定时才投递；基座离线不影响其他任务。"""
+        return self._augmentation_configured
 
     @property
     def redis_settings(self) -> RedisSettings:
@@ -144,6 +152,10 @@ class ArqJobDispatcher:
             if not self._ddm_training_configured:
                 return None
             return "dispatch_ddm_training_job", job.updated_at
+        if job.job_type is JobType.DATASET_AUGMENTATION:
+            if not self._augmentation_configured:
+                return None
+            return "augment_dataset_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION_PREPARATION:
             return "prepare_annotation_context_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION:

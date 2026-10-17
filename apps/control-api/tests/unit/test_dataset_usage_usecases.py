@@ -36,11 +36,12 @@ from factory_sop.dataset.model import (
     ArtifactStatus,
     DatasetArtifact,
     DatasetMember,
-    DdmTrainingCommand,
-    DdmTrainingCommandStatus,
     MemberStatus,
     ObjectStat,
+    TrainingCommand,
+    TrainingCommandStatus,
     TrainingDataset,
+    TrainingService,
     UsageCheck,
     UsageCheckStatus,
     UsageKind,
@@ -48,7 +49,7 @@ from factory_sop.dataset.model import (
     VlmCandidateKind,
     VlmMediaReference,
 )
-from factory_sop.dataset.repository import DdmTrainingCommandRepository, UsageDatasetRepository
+from factory_sop.dataset.repository import TrainingCommandRepository, UsageDatasetRepository
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usage import (
     VLM_CONSUMER_PARAMETERS,
@@ -58,9 +59,9 @@ from factory_sop.dataset.usage import (
     UsageValidationResult,
     canonical_json,
 )
-from factory_sop.dataset.usecases.ddm_command import (
-    DdmTrainingCommandResult,
-    request_ddm_training_command,
+from factory_sop.dataset.usecases.ddm_command import request_ddm_training_command
+from factory_sop.dataset.usecases.training_command import (
+    TrainingCommandResult,
     request_digest,
 )
 from factory_sop.dataset.usecases.usage import (
@@ -101,9 +102,9 @@ from factory_sop.dataset.usecases.usage import (
 from factory_sop.identifiers import new_id
 from factory_sop.job.api import (
     ApplicationJob,
-    DdmTrainingJobQueue,
     JobStatus,
     JobType,
+    TrainingJobQueue,
     UsageJobQueue,
 )
 
@@ -243,7 +244,7 @@ class FakeUsageDatasets:
     candidates: dict[UUID, VlmCandidate] = field(default_factory=dict)
     checks: dict[UUID, UsageCheck] = field(default_factory=dict)
     artifacts: dict[UUID, DatasetArtifact] = field(default_factory=dict)
-    ddm_commands: dict[UUID, DdmTrainingCommand] = field(default_factory=dict)
+    ddm_commands: dict[UUID, TrainingCommand] = field(default_factory=dict)
 
     def dataset_by_id(self, dataset_id: UUID) -> TrainingDataset | None:
         return self.dataset if dataset_id == self.dataset.id else None
@@ -349,7 +350,7 @@ class FakeUsageDatasets:
         self.artifacts[value.id] = value
         return True
 
-    def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
+    def add_training_command(self, value: TrainingCommand) -> bool:
         if any(
             item.dataset_id == value.dataset_id and item.idempotency_key == value.idempotency_key
             for item in self.ddm_commands.values()
@@ -358,19 +359,23 @@ class FakeUsageDatasets:
         self.ddm_commands[value.id] = value
         return True
 
-    def ddm_training_command_by_idempotency(
-        self, *, dataset_id: UUID, idempotency_key: str
-    ) -> DdmTrainingCommand | None:
+    def training_command_by_idempotency(
+        self, *, service: TrainingService, dataset_id: UUID, idempotency_key: str
+    ) -> TrainingCommand | None:
         for item in self.ddm_commands.values():
-            if item.dataset_id == dataset_id and item.idempotency_key == idempotency_key:
+            if (
+                item.service is service
+                and item.dataset_id == dataset_id
+                and item.idempotency_key == idempotency_key
+            ):
                 return item
         return None
 
-    def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
+    def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
         return self.ddm_commands.get(command_id)
 
-    def save_ddm_training_command(
-        self, value: DdmTrainingCommand, *, expected_updated_at: datetime
+    def save_training_command(
+        self, value: TrainingCommand, *, expected_updated_at: datetime
     ) -> bool:
         stored = self.ddm_commands.get(value.id)
         if stored is None or stored.updated_at != expected_updated_at:
@@ -407,15 +412,20 @@ class FakeUsageJobs:
             dataset_id=dataset_id, resource_id=artifact_id, kind=JobType.DATASET_ARTIFACT, now=now
         )
 
-    def get_or_create_ddm_training(
-        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    def get_or_create_training(
+        self,
+        *,
+        job_type: JobType,
+        dataset_id: UUID,
+        command_id: UUID,
+        now: datetime,
     ) -> ApplicationJob:
         for job in self.jobs.values():
-            if job.job_type is JobType.DATASET_DDM_TRAINING and job.attempt_id == command_id:
+            if job.job_type is job_type and job.attempt_id == command_id:
                 return job
         job = ApplicationJob(
             id=self.next_id,
-            job_type=JobType.DATASET_DDM_TRAINING,
+            job_type=job_type,
             status=JobStatus.PENDING,
             member_id=dataset_id,
             attempt_id=command_id,
@@ -2211,34 +2221,34 @@ class TwoSetDatasets:
         owner = self._for_artifact(artifact_id)
         return owner.artifacts.get(artifact_id) if owner is not None else None
 
-    def add_ddm_training_command(self, value: DdmTrainingCommand) -> bool:
+    def add_training_command(self, value: TrainingCommand) -> bool:
         owner = self._for_dataset(value.dataset_id)
-        return owner.add_ddm_training_command(value) if owner is not None else False
+        return owner.add_training_command(value) if owner is not None else False
 
-    def ddm_training_command_by_idempotency(
-        self, *, dataset_id: UUID, idempotency_key: str
-    ) -> DdmTrainingCommand | None:
+    def training_command_by_idempotency(
+        self, *, service: TrainingService, dataset_id: UUID, idempotency_key: str
+    ) -> TrainingCommand | None:
         owner = self._for_dataset(dataset_id)
         if owner is None:
             return None
-        return owner.ddm_training_command_by_idempotency(
-            dataset_id=dataset_id, idempotency_key=idempotency_key
+        return owner.training_command_by_idempotency(
+            service=service, dataset_id=dataset_id, idempotency_key=idempotency_key
         )
 
-    def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
+    def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
         for owner in self._sets:
-            value = owner.ddm_training_command_by_id(command_id)
+            value = owner.training_command_by_id(command_id)
             if value is not None:
                 return value
         return None
 
-    def save_ddm_training_command(
-        self, value: DdmTrainingCommand, *, expected_updated_at: datetime
+    def save_training_command(
+        self, value: TrainingCommand, *, expected_updated_at: datetime
     ) -> bool:
         owner = self._for_dataset(value.dataset_id)
         if owner is None:
             return False
-        return owner.save_ddm_training_command(value, expected_updated_at=expected_updated_at)
+        return owner.save_training_command(value, expected_updated_at=expected_updated_at)
 
 
 def _frozen_selection(datasets: FakeUsageDatasets, artifact: DatasetArtifact) -> DdmInputSelection:
@@ -2815,11 +2825,11 @@ def test_request_ddm_training_command_binds_frozen_inputs_to_pending_command_and
         idempotency_key="ddm-1",
         caller=caller(Permission.DATASET_EDIT),
         now=NOW,
-        datasets=cast(DdmTrainingCommandRepository, datasets),
-        jobs=cast(DdmTrainingJobQueue, jobs),
+        datasets=cast(TrainingCommandRepository, datasets),
+        jobs=cast(TrainingJobQueue, jobs),
     )
 
-    assert result.command.status is DdmTrainingCommandStatus.PENDING
+    assert result.command.status is TrainingCommandStatus.PENDING
     assert result.command.dataset_id == training.dataset.id
     assert result.command.idempotency_key == "ddm-1"
     assert result.command.job_id == result.job.id
@@ -2842,15 +2852,15 @@ def test_request_ddm_training_command_replay_same_content_returns_original_comma
     )
     jobs = FakeUsageJobs()
 
-    def submit() -> DdmTrainingCommandResult:
+    def submit() -> TrainingCommandResult:
         return request_ddm_training_command(
             training=training_selection,
             validation=validation_selection,
             idempotency_key="ddm-1",
             caller=caller(Permission.DATASET_EDIT),
             now=NOW,
-            datasets=cast(DdmTrainingCommandRepository, datasets),
-            jobs=cast(DdmTrainingJobQueue, jobs),
+            datasets=cast(TrainingCommandRepository, datasets),
+            jobs=cast(TrainingJobQueue, jobs),
         )
 
     first = submit()
@@ -2875,8 +2885,8 @@ def test_request_ddm_training_command_changed_content_conflicts() -> None:
         idempotency_key="ddm-1",
         caller=caller(Permission.DATASET_EDIT),
         now=NOW,
-        datasets=cast(DdmTrainingCommandRepository, datasets),
-        jobs=cast(DdmTrainingJobQueue, jobs),
+        datasets=cast(TrainingCommandRepository, datasets),
+        jobs=cast(TrainingJobQueue, jobs),
     )
     other_validation = _second_validation_datasets()
     other_artifact, _ = _passing_ddm_artifact(other_validation, jobs)
@@ -2890,8 +2900,8 @@ def test_request_ddm_training_command_changed_content_conflicts() -> None:
             idempotency_key="ddm-1",
             caller=caller(Permission.DATASET_EDIT),
             now=NOW,
-            datasets=cast(DdmTrainingCommandRepository, changed_repository),
-            jobs=cast(DdmTrainingJobQueue, jobs),
+            datasets=cast(TrainingCommandRepository, changed_repository),
+            jobs=cast(TrainingJobQueue, jobs),
         )
 
     assert refused.value.code is DatasetRefusalCode.IDEMPOTENCY_CONFLICT
@@ -2909,8 +2919,8 @@ def test_request_ddm_training_command_requires_edit_permission() -> None:
             idempotency_key="ddm-1",
             caller=caller(Permission.DATASET_VIEW),
             now=NOW,
-            datasets=cast(DdmTrainingCommandRepository, datasets),
-            jobs=cast(DdmTrainingJobQueue, FakeUsageJobs()),
+            datasets=cast(TrainingCommandRepository, datasets),
+            jobs=cast(TrainingJobQueue, FakeUsageJobs()),
         )
 
 
@@ -2926,8 +2936,8 @@ def test_request_ddm_training_command_rejects_a_blank_idempotency_key() -> None:
             idempotency_key="   ",
             caller=caller(Permission.DATASET_EDIT),
             now=NOW,
-            datasets=cast(DdmTrainingCommandRepository, datasets),
-            jobs=cast(DdmTrainingJobQueue, FakeUsageJobs()),
+            datasets=cast(TrainingCommandRepository, datasets),
+            jobs=cast(TrainingJobQueue, FakeUsageJobs()),
         )
 
     assert refused.value.code is DatasetRefusalCode.IDEMPOTENCY_CONFLICT

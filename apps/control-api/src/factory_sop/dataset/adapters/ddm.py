@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -15,6 +14,13 @@ from uuid import UUID
 
 import yaml  # type: ignore[import-untyped]  # PyYAML 无随包类型存根，解析失败由本适配器显式分类
 
+from factory_sop.dataset.adapters.training_execution import (
+    TrainingResultInvalidError,
+    TrainingResultUnavailableError,
+    ensure_within_root,
+    is_directory,
+    is_regular_file,
+)
 from factory_sop.dataset.usage import (
     DdmReaderInputError,
     DdmReaderUnavailableError,
@@ -30,14 +36,6 @@ _MERGED_CONFIG_RELATIVE = Path("train")
 _MERGED_CONFIG_NAME = "config.yaml"
 _CHECKPOINT_NAME = "last.ckpt"
 _TRUSTED_CONFIG_FILENAMES = frozenset({"config.yaml", "ddm_train_config.yaml"})
-
-
-class DdmResultUnavailableError(Exception):
-    """结果文件尚不存在/未就绪：按可恢复诊断处理，不做为成功。"""
-
-
-class DdmResultInvalidError(Exception):
-    """结果文件存在但不可信：不是本次输入的真实配置或真实非空 checkpoint。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,20 +92,20 @@ class LocalDdmResultVolume:
             if str(UUID(base_job_id)) != base_job_id:
                 raise ValueError
         except ValueError as error:
-            raise DdmResultInvalidError("基座结果任务身份非法") from error
+            raise TrainingResultInvalidError("基座结果任务身份非法") from error
         for name in (training_dataset_id, validation_dataset_id):
             if not name or Path(name).name != name or name in {".", ".."}:
-                raise DdmResultInvalidError("基座输入目录身份非法")
+                raise TrainingResultInvalidError("基座输入目录身份非法")
         job_directory = self._results_root / base_job_id
-        _within_root(self._results_root, job_directory)
-        if not _is_directory(job_directory):
-            raise DdmResultUnavailableError("基座结果目录尚未出现")
+        ensure_within_root(self._results_root, job_directory)
+        if not is_directory(job_directory):
+            raise TrainingResultUnavailableError("基座结果目录尚未出现")
         job_config = self._locate_job_config(job_directory, base_job_id)
         merged_config = job_directory / _MERGED_CONFIG_RELATIVE / base_job_id / _MERGED_CONFIG_NAME
-        if not _is_regular_file(merged_config):
-            raise DdmResultUnavailableError("基座合并配置尚未写出")
-        _within_root(self._results_root, job_config)
-        _within_root(self._results_root, merged_config)
+        if not is_regular_file(merged_config):
+            raise TrainingResultUnavailableError("基座合并配置尚未写出")
+        ensure_within_root(self._results_root, job_config)
+        ensure_within_root(self._results_root, merged_config)
         document = _load_config_document(job_config)
         _verify_job_config(
             document, job_config=job_config, job_directory=job_directory, base_job_id=base_job_id
@@ -133,17 +131,17 @@ class LocalDdmResultVolume:
             facts=dispatch_facts,
         )
         checkpoint = job_directory / _MERGED_CONFIG_RELATIVE / base_job_id / _CHECKPOINT_NAME
-        _within_root(self._results_root, checkpoint)
-        if not _is_regular_file(checkpoint):
-            raise DdmResultUnavailableError("基座 checkpoint 尚未写出")
+        ensure_within_root(self._results_root, checkpoint)
+        if not is_regular_file(checkpoint):
+            raise TrainingResultUnavailableError("基座 checkpoint 尚未写出")
         try:
             with checkpoint.open("rb") as reader:
                 if not reader.read(1):
-                    raise DdmResultInvalidError("基座 checkpoint 为空文件")
+                    raise TrainingResultInvalidError("基座 checkpoint 为空文件")
             if checkpoint.stat().st_size <= 0:
-                raise DdmResultInvalidError("基座 checkpoint 为空文件")
+                raise TrainingResultInvalidError("基座 checkpoint 为空文件")
         except OSError as error:
-            raise DdmResultUnavailableError("基座 checkpoint 不可读") from error
+            raise TrainingResultUnavailableError("基座 checkpoint 不可读") from error
         return DdmResultSource(
             config_path=merged_config,
             config_filename=_MERGED_CONFIG_NAME,
@@ -154,24 +152,10 @@ class LocalDdmResultVolume:
     def _locate_job_config(self, job_directory: Path, base_job_id: str) -> Path:
         for suffix in _JOB_CONFIG_SUFFIXES:
             candidate = job_directory / f"{base_job_id}{suffix}"
-            _within_root(self._results_root, candidate)
-            if _is_regular_file(candidate):
+            ensure_within_root(self._results_root, candidate)
+            if is_regular_file(candidate):
                 return candidate
-        raise DdmResultUnavailableError("基座 job 配置尚未写出")
-
-
-def _is_directory(path: Path) -> bool:
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
-
-
-def _is_regular_file(path: Path) -> bool:
-    try:
-        return stat.S_ISREG(path.lstat().st_mode) and not path.is_symlink()
-    except OSError:
-        return False
+        raise TrainingResultUnavailableError("基座 job 配置尚未写出")
 
 
 def _load_config_document(path: Path) -> dict[str, Any]:
@@ -184,9 +168,9 @@ def _load_config_document(path: Path) -> dict[str, Any]:
         else:
             document = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, yaml.YAMLError) as error:
-        raise DdmResultInvalidError("基座结果配置不可解析") from error
+        raise TrainingResultInvalidError("基座结果配置不可解析") from error
     if not isinstance(document, dict):
-        raise DdmResultInvalidError("基座结果配置不是映射")
+        raise TrainingResultInvalidError("基座结果配置不是映射")
     return document
 
 
@@ -198,14 +182,14 @@ def _verify_job_config(
     base_job_id: str,
 ) -> None:
     if job_config.name not in _TRUSTED_CONFIG_FILENAMES and job_config.stem != base_job_id:
-        raise DdmResultInvalidError("基座 job 配置文件名与任务身份不一致")
+        raise TrainingResultInvalidError("基座 job 配置文件名与任务身份不一致")
     training_config = document.get("training_config")
     if not isinstance(training_config, Mapping):
-        raise DdmResultInvalidError("基座 job 配置缺少 training_config")
+        raise TrainingResultInvalidError("基座 job 配置缺少 training_config")
     if _normalized_path(training_config.get("output")) != _normalized_path(job_directory):
-        raise DdmResultInvalidError("基座 job 配置的输出去向不是本任务结果目录")
+        raise TrainingResultInvalidError("基座 job 配置的输出去向不是本任务结果目录")
     if str(training_config.get("exp_name")) != base_job_id:
-        raise DdmResultInvalidError("基座 job 配置的实验名与任务身份不一致")
+        raise TrainingResultInvalidError("基座 job 配置的实验名与任务身份不一致")
 
 
 def _verify_merged_config(
@@ -219,31 +203,31 @@ def _verify_merged_config(
 ) -> None:
     dataset_config = document.get("dataset_config")
     if not isinstance(dataset_config, Mapping):
-        raise DdmResultInvalidError("基座配置缺少 dataset_config")
+        raise TrainingResultInvalidError("基座配置缺少 dataset_config")
     actual_training, actual_validation = ddm_reader_parameters(document)
     if dict(actual_training) != dict(training_consumer_parameters) or dict(
         actual_validation
     ) != dict(validation_consumer_parameters):
-        raise DdmResultInvalidError("基座读取器按角色参数与本命令冻结值不一致")
+        raise TrainingResultInvalidError("基座读取器按角色参数与本命令冻结值不一致")
     train_config = dataset_config.get("train_config")
     val_config = dataset_config.get("val_config")
     if not isinstance(train_config, Mapping) or not isinstance(val_config, Mapping):
-        raise DdmResultInvalidError("基座合并配置缺少训练/验证配置")
+        raise TrainingResultInvalidError("基座合并配置缺少训练/验证配置")
     if _normalized_path(train_config.get("data_root")) != _normalized_path(
         dataset_root / training_dataset_id
     ):
-        raise DdmResultInvalidError("基座训练路径与本次冻结训练集不一致")
+        raise TrainingResultInvalidError("基座训练路径与本次冻结训练集不一致")
     if _normalized_path(val_config.get("data_root")) != _normalized_path(
         dataset_root / validation_dataset_id
     ):
-        raise DdmResultInvalidError("基座验证路径与本次冻结验证集不一致")
+        raise TrainingResultInvalidError("基座验证路径与本次冻结验证集不一致")
     for role_config, directory, filename in (
         (train_config, dataset_root / training_dataset_id, "ddm_train_annotation.json"),
         (val_config, dataset_root / validation_dataset_id, "ddm_val_annotation.json"),
     ):
-        _within_root(dataset_root, directory)
+        ensure_within_root(dataset_root, directory)
         if _normalized_path(role_config.get("anno_path")) != str((directory / filename).absolute()):
-            raise DdmResultInvalidError("基座标注路径不是本次角色的消费文件")
+            raise TrainingResultInvalidError("基座标注路径不是本次角色的消费文件")
 
 
 def _normalized_path(value: object) -> str | None:
@@ -285,28 +269,12 @@ def ddm_reader_parameters(
         validation["temporal_stride"] = dataset["val_config"]["temporal_stride"]
         return training, validation
     except (KeyError, TypeError, ValueError) as error:
-        raise DdmResultInvalidError("基座配置缺少或不符合真实训练/验证读取器字段") from error
+        raise TrainingResultInvalidError("基座配置缺少或不符合真实训练/验证读取器字段") from error
 
 
 def load_ddm_reader_parameters(path: Path) -> tuple[Mapping[str, object], Mapping[str, object]]:
     """每次派发前才读取受信部署配置，缺失文件不阻止控制面/worker 启动。"""
     return ddm_reader_parameters(_load_config_document(path))
-
-
-def _within_root(root: Path, path: Path) -> None:
-    root = root.absolute()
-    path = path.absolute()
-    try:
-        relative = path.relative_to(root)
-    except ValueError as error:
-        raise DdmResultInvalidError("基座文件路径越出受信挂载") from error
-    if ".." in relative.parts or root.is_symlink():
-        raise DdmResultInvalidError("基座文件路径越界或使用符号链接")
-    current = root
-    for part in relative.parts:
-        current = current / part
-        if current.is_symlink():
-            raise DdmResultInvalidError("基座文件路径使用符号链接")
 
 
 def _verify_consumed_bytes(
@@ -323,7 +291,7 @@ def _verify_consumed_bytes(
         or facts.get("input_id") != str(frozen.input_id)
         or consumption.get("input_id") != str(frozen.input_id)
     ):
-        raise DdmResultInvalidError("消费记录与冻结输入身份不一致")
+        raise TrainingResultInvalidError("消费记录与冻结输入身份不一致")
     expected_files = []
     for role, inputs, directory_id in (
         ("training", frozen.training, training_dataset_id),
@@ -335,7 +303,7 @@ def _verify_consumed_bytes(
             "ddm_train_annotation.json" if role == "training" else "ddm_val_annotation.json"
         )
         if filename != expected_name:
-            raise DdmResultInvalidError("消费标注文件身份不一致")
+            raise TrainingResultInvalidError("消费标注文件身份不一致")
         _verify_digest(
             dataset_root, directory / expected_name, consumption.get(f"{role}_annotation_sha256")
         )
@@ -357,22 +325,22 @@ def _verify_consumed_bytes(
                 }
             )
     if consumption.get("consumed_files") != expected_files:
-        raise DdmResultInvalidError("实际消费媒体清单与冻结来源不一致")
+        raise TrainingResultInvalidError("实际消费媒体清单与冻结来源不一致")
 
 
 def _verify_digest(root: Path, path: Path, expected: object, size: int | None = None) -> None:
-    _within_root(root, path)
-    if not _is_regular_file(path):
-        raise DdmResultInvalidError("实际消费输入不是常规文件")
+    ensure_within_root(root, path)
+    if not is_regular_file(path):
+        raise TrainingResultInvalidError("实际消费输入不是常规文件")
     try:
         digest = sha256()
         with path.open("rb") as source:
             while chunk := source.read(1024 * 1024):
                 digest.update(chunk)
         if digest.hexdigest() != expected or (size is not None and path.stat().st_size != size):
-            raise DdmResultInvalidError("实际消费输入摘要/大小与冻结来源不一致")
+            raise TrainingResultInvalidError("实际消费输入摘要/大小与冻结来源不一致")
     except OSError as error:
-        raise DdmResultUnavailableError("实际消费输入不可读") from error
+        raise TrainingResultUnavailableError("实际消费输入不可读") from error
 
 
 _BASE_READER = (

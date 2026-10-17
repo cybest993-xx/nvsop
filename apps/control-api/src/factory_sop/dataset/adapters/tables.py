@@ -34,10 +34,11 @@ from factory_sop.dataset.model import (
     ArtifactStatus,
     DatasetArtifact,
     DatasetMember,
-    DdmTrainingCommand,
-    DdmTrainingCommandStatus,
-    DdmTrainingResultStatus,
+    TrainingCommand,
+    TrainingCommandStatus,
     TrainingDataset,
+    TrainingResultStatus,
+    TrainingService,
     UploadAttempt,
     UsageCheck,
     UsageCheckStatus,
@@ -711,16 +712,17 @@ class DatasetArtifactRow(Table):
         )
 
 
-class DdmTrainingCommandRow(Table):
-    """已受理的 DDM 训练应用命令及其冻结负载与派发事实。"""
+class TrainingCommandRow(Table):
+    """已受理的训练应用命令及其冻结负载与派发事实。"""
 
-    __tablename__ = "dataset_ddm_training_command"
+    __tablename__ = "dataset_training_command"
     __table_args__ = (
-        UniqueConstraint("dataset_id", "idempotency_key"),
+        UniqueConstraint("dataset_id", "service", "idempotency_key"),
         UniqueConstraint("job_id"),
-        # 每个逻辑基座目标最多一条在途命令：仅 result_unknown/bound 持有保护。
+        # 每个服务的每个逻辑基座目标最多一条在途命令：仅 result_unknown/bound 持有保护。
         Index(
-            "uq_dataset_ddm_training_command_backend_target_inflight",
+            "uq_dataset_training_command_service_backend_target_inflight",
+            "service",
             "backend_target",
             unique=True,
             postgresql_where=text("status IN ('result_unknown', 'bound')"),
@@ -731,6 +733,7 @@ class DdmTrainingCommandRow(Table):
     dataset_id: Mapped[UUID] = mapped_column(
         Uuid(), ForeignKey("dataset_training_dataset.id", ondelete="CASCADE"), index=True
     )
+    service: Mapped[str] = mapped_column(String(16), index=True)
     status: Mapped[str] = mapped_column(String(32))
     idempotency_key: Mapped[str] = mapped_column(String(255))
     request_digest: Mapped[str] = mapped_column(String(64))
@@ -763,12 +766,17 @@ class DdmTrainingCommandRow(Table):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     cancelled_by: Mapped[UUID | None] = mapped_column(Uuid())
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_by: Mapped[UUID | None] = mapped_column(Uuid())
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_response: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
+    cancel_detail: Mapped[str | None] = mapped_column(String(512))
 
-    def to_domain(self) -> DdmTrainingCommand:
-        return DdmTrainingCommand(
+    def to_domain(self) -> TrainingCommand:
+        return TrainingCommand(
             id=self.id,
             dataset_id=self.dataset_id,
-            status=DdmTrainingCommandStatus(self.status),
+            service=TrainingService(self.service),
+            status=TrainingCommandStatus(self.status),
             idempotency_key=self.idempotency_key,
             request_digest=self.request_digest,
             payload=dict(self.payload),
@@ -785,10 +793,14 @@ class DdmTrainingCommandRow(Table):
             failure_detail=self.failure_detail,
             cancelled_by=self.cancelled_by,
             cancelled_at=self.cancelled_at,
+            cancel_requested_by=self.cancel_requested_by,
+            cancel_requested_at=self.cancel_requested_at,
+            cancel_response=self.cancel_response,
+            cancel_detail=self.cancel_detail,
             last_observed_at=self.last_observed_at,
             observation_failure_code=self.observation_failure_code,
             observation_failure_detail=self.observation_failure_detail,
-            result_status=DdmTrainingResultStatus(self.result_status),
+            result_status=TrainingResultStatus(self.result_status),
             result_generation=self.result_generation,
             result_config_object_key=self.result_config_object_key,
             result_config_sha256=self.result_config_sha256,
@@ -802,10 +814,11 @@ class DdmTrainingCommandRow(Table):
         )
 
     @classmethod
-    def from_domain(cls, value: DdmTrainingCommand) -> DdmTrainingCommandRow:
+    def from_domain(cls, value: TrainingCommand) -> TrainingCommandRow:
         return cls(
             id=value.id,
             dataset_id=value.dataset_id,
+            service=value.service.value,
             status=value.status.value,
             idempotency_key=value.idempotency_key,
             request_digest=value.request_digest,
@@ -839,4 +852,10 @@ class DdmTrainingCommandRow(Table):
             updated_at=value.updated_at,
             cancelled_by=value.cancelled_by,
             cancelled_at=value.cancelled_at,
+            cancel_requested_by=value.cancel_requested_by,
+            cancel_requested_at=value.cancel_requested_at,
+            cancel_response=dict(value.cancel_response)
+            if value.cancel_response is not None
+            else None,
+            cancel_detail=value.cancel_detail,
         )

@@ -29,7 +29,7 @@ from factory_sop.dataset.adapters import dependencies
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.repository import (
     DatasetRepository,
-    DdmTrainingCommandRepository,
+    TrainingCommandRepository,
     UsageDatasetRepository,
 )
 from factory_sop.dataset.storage import (
@@ -48,15 +48,16 @@ from factory_sop.dataset.usecases import (
     request_video_upload,
     retry_video_upload,
 )
-from factory_sop.dataset.usecases.ddm_command import (
-    authorize_ddm_result_access,
-    cancel_ddm_training_command,
-    list_ddm_training_commands,
-    read_ddm_training_command,
-    request_ddm_training_command,
+from factory_sop.dataset.usecases.ddm_command import request_ddm_training_command
+from factory_sop.dataset.usecases.training_command import (
+    authorize_training_result_access,
+    cancel_training_command,
+    list_training_commands,
+    read_training_command,
 )
 from factory_sop.dataset.usecases.usage import (
     DdmInputSelection,
+    VlmInputSelection,
     list_artifacts,
     list_usage_checks,
     list_vlm_candidates,
@@ -68,9 +69,10 @@ from factory_sop.dataset.usecases.usage import (
     request_usage_check,
     usage_check_is_current,
 )
+from factory_sop.dataset.usecases.vlm_command import request_vlm_training_command
 from factory_sop.job.api import (
     ApplicationJob,
-    DdmTrainingJobQueue,
+    TrainingJobQueue,
     UsageJobQueue,
     ValidationJobQueue,
 )
@@ -446,8 +448,18 @@ class RequestDdmTrainingCommandInput(BaseModel):
     validation: DdmInputSelectionInput
 
 
+class RequestVlmTrainingCommandInput(BaseModel):
+    """受理一条 VLM 训练命令所需的已通过用途检查。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    usage_check_id: UUID
+
+
 class DdmTrainingCommandView(BaseModel):
-    """DDM 训练命令的公开事实。
+    """一条训练命令的公开事实（DDM 与 VLM 共用同一形状）。
+
+    schema 名由已发布契约冻结（ADR-0003）：这里是同一份 wire 事实，不是 DDM 专属字段。
 
     只暴露应用状态、基座原状态/观测时刻/查询诊断与结果登记事实；冻结负载、内部路径、
     媒体身份与消费摘要不进入公开响应。
@@ -1247,7 +1259,7 @@ def read_a_dataset_artifact(
     )
 
 
-def _ddm_command_view(value: model.DdmTrainingCommand) -> DdmTrainingCommandView:
+def _training_command_view(value: model.TrainingCommand) -> DdmTrainingCommandView:
     observation = value.base_observation
     base_status = (
         str(observation.get("status"))
@@ -1286,10 +1298,11 @@ def _ddm_command_view(value: model.DdmTrainingCommand) -> DdmTrainingCommandView
     )
 
 
-def _ddm_result_view(
-    value: model.DdmTrainingCommand, *, media_origin: str | None
+def _training_result_view(
+    value: model.TrainingCommand, *, media_origin: str | None, service: model.TrainingService
 ) -> DdmTrainingResultView:
-    registered = value.result_status is model.DdmTrainingResultStatus.REGISTERED
+    naming = model.TRAINING_RESULT_NAMING[service]
+    registered = value.result_status is model.TrainingResultStatus.REGISTERED
     config_view: DdmResultFileView | None = None
     checkpoint_view: DdmResultFileView | None = None
     access: DdmResultAccessView | None = None
@@ -1307,8 +1320,8 @@ def _ddm_result_view(
         if isinstance(media_origin, str) and media_origin:
             origin = media_origin.rstrip("/")
             access = DdmResultAccessView(
-                config_url=f"{origin}/ddm-results/{value.id}/config",
-                checkpoint_url=f"{origin}/ddm-results/{value.id}/checkpoint",
+                config_url=f"{origin}/{naming.prefix}/{value.id}/config",
+                checkpoint_url=f"{origin}/{naming.prefix}/{value.id}/checkpoint",
             )
     return DdmTrainingResultView(
         command_id=value.id,
@@ -1389,6 +1402,134 @@ def download_a_dataset_artifact(
 
 
 ddm_result_router = APIRouter(prefix="/ddm-results", tags=["dataset-ddm"])
+vlm_result_router = APIRouter(prefix="/vlm-results", tags=["dataset-vlm"])
+
+# 每个训练服务的数据通道只回传自己的对象键头；客户端不能选择对象键、文件路径或上游。
+_RESULT_OBJECT_HEADERS = {
+    model.TrainingService.DDM: "X-DDM-Result-Object",
+    model.TrainingService.VLM: "X-VLM-Result-Object",
+}
+
+
+def _training_command_page(
+    *,
+    service: model.TrainingService,
+    dataset_id: UUID,
+    caller: Authorized,
+    datasets: TrainingCommandRepository,
+    page: int,
+    page_size: int,
+) -> ItemPage[DdmTrainingCommandView]:
+    """按数据集与服务读取一页命令；两种训练服务共用同一实现。"""
+    values = list(
+        list_training_commands(
+            service=service, dataset_id=dataset_id, caller=caller, datasets=datasets
+        )
+    )
+    return ItemPage(
+        items=[
+            _training_command_view(value)
+            for value in values[(page - 1) * page_size : page * page_size]
+        ],
+        page=page,
+        page_size=page_size,
+        total=len(values),
+    )
+
+
+def _read_command_view(
+    *,
+    service: model.TrainingService,
+    dataset_id: UUID,
+    command_id: UUID,
+    caller: Authorized,
+    datasets: TrainingCommandRepository,
+) -> DdmTrainingCommandView:
+    return _training_command_view(
+        read_training_command(
+            service=service,
+            dataset_id=dataset_id,
+            command_id=command_id,
+            caller=caller,
+            datasets=datasets,
+        )
+    )
+
+
+def _cancel_command_view(
+    *,
+    service: model.TrainingService,
+    dataset_id: UUID,
+    command_id: UUID,
+    caller: Authorized,
+    datasets: TrainingCommandRepository,
+) -> DdmTrainingCommandView:
+    """未派发命令直接取消；支持该能力的服务只记录已派发取消请求，不宣称基座已停止。"""
+    return _training_command_view(
+        cancel_training_command(
+            service=service,
+            dataset_id=dataset_id,
+            command_id=command_id,
+            caller=caller,
+            now=datetime.now(UTC),
+            datasets=datasets,
+        )
+    )
+
+
+def _read_result_view(
+    *,
+    service: model.TrainingService,
+    dataset_id: UUID,
+    command_id: UUID,
+    caller: Authorized,
+    request: Request,
+    datasets: TrainingCommandRepository,
+) -> DdmTrainingResultView:
+    """返回结果登记事实与已授权数据通道地址；不在此中转大体积字节。"""
+    command = read_training_command(
+        service=service,
+        dataset_id=dataset_id,
+        command_id=command_id,
+        caller=caller,
+        datasets=datasets,
+    )
+    settings = request.app.state.settings
+    return _training_result_view(
+        command, media_origin=settings.annotation_media_origin, service=service
+    )
+
+
+def _authorize_result_response(
+    *,
+    service: model.TrainingService,
+    command_id: UUID,
+    kind: str,
+    caller: Authorized,
+    datasets: TrainingCommandRepository,
+) -> Response:
+    """供 Nginx auth_request 子请求；只校验登录用户的 DATASET_VIEW 与结果成员身份。"""
+    if kind not in {"config", "checkpoint"}:
+        return Response(status_code=status.HTTP_403_FORBIDDEN)
+    try:
+        command = authorize_training_result_access(
+            service=service,
+            command_id=command_id,
+            caller=caller,
+            datasets=datasets,
+        )
+    except DatasetRefusedError:
+        return Response(status_code=status.HTTP_403_FORBIDDEN)
+    object_key = (
+        command.result_config_object_key
+        if kind == "config"
+        else command.result_checkpoint_object_key
+    )
+    assert object_key is not None
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT,
+        headers={_RESULT_OBJECT_HEADERS[service]: object_key, "Cache-Control": "no-store"},
+    )
 
 
 @router.post(
@@ -1403,8 +1544,8 @@ def request_a_ddm_training_command(
     dataset_id: UUID,
     submitted: RequestDdmTrainingCommandInput,
     caller: Authorized,
-    datasets: Annotated[DdmTrainingCommandRepository, Depends(dependencies.datasets)],
-    jobs: Annotated[DdmTrainingJobQueue, Depends(dependencies.usage_jobs)],
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
+    jobs: Annotated[TrainingJobQueue, Depends(dependencies.usage_jobs)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> DdmTrainingCommandAcceptedView:
     """受理一条 DDM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。"""
@@ -1431,7 +1572,41 @@ def request_a_ddm_training_command(
         jobs=jobs,
     )
     return DdmTrainingCommandAcceptedView(
-        command=_ddm_command_view(result.command),
+        command=_training_command_view(result.command),
+        job=_usage_job_view(result.job),
+    )
+
+
+@router.post(
+    "/{dataset_id}/vlm-training-commands",
+    response_model=DdmTrainingCommandAcceptedView,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="requestVlmTrainingCommand",
+    openapi_extra=needs(Permission.DATASET_EDIT),
+    responses=ProblemResponses,
+)
+def request_a_vlm_training_command(
+    dataset_id: UUID,
+    submitted: RequestVlmTrainingCommandInput,
+    caller: Authorized,
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
+    jobs: Annotated[TrainingJobQueue, Depends(dependencies.usage_jobs)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> DdmTrainingCommandAcceptedView:
+    """受理一条 VLM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。"""
+    result = request_vlm_training_command(
+        selection=VlmInputSelection(
+            dataset_id=dataset_id,
+            usage_check_id=submitted.usage_check_id,
+        ),
+        idempotency_key=idempotency_key,
+        caller=caller,
+        now=datetime.now(UTC),
+        datasets=datasets,
+        jobs=jobs,
+    )
+    return DdmTrainingCommandAcceptedView(
+        command=_training_command_view(result.command),
         job=_usage_job_view(result.job),
     )
 
@@ -1446,21 +1621,43 @@ def request_a_ddm_training_command(
 def list_the_ddm_training_commands(
     dataset_id: UUID,
     caller: Authorized,
-    datasets: Annotated[DdmTrainingCommandRepository, Depends(dependencies.datasets)],
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> ItemPage[DdmTrainingCommandView]:
     """重新打开页面后按数据集恢复原命令，不依赖页面内缓存。"""
-    values = list(
-        list_ddm_training_commands(dataset_id=dataset_id, caller=caller, datasets=datasets)
-    )
-    return ItemPage(
-        items=[
-            _ddm_command_view(value) for value in values[(page - 1) * page_size : page * page_size]
-        ],
+    return _training_command_page(
+        service=model.TrainingService.DDM,
+        dataset_id=dataset_id,
+        caller=caller,
+        datasets=datasets,
         page=page,
         page_size=page_size,
-        total=len(values),
+    )
+
+
+@router.get(
+    "/{dataset_id}/vlm-training-commands",
+    response_model=ItemPage[DdmTrainingCommandView],
+    operation_id="listVlmTrainingCommands",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def list_the_vlm_training_commands(
+    dataset_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAXIMUM_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ItemPage[DdmTrainingCommandView]:
+    """重新打开页面后按数据集恢复原 VLM 命令，不依赖页面内缓存。"""
+    return _training_command_page(
+        service=model.TrainingService.VLM,
+        dataset_id=dataset_id,
+        caller=caller,
+        datasets=datasets,
+        page=page,
+        page_size=page_size,
     )
 
 
@@ -1475,15 +1672,36 @@ def read_a_ddm_training_command(
     dataset_id: UUID,
     command_id: UUID,
     caller: Authorized,
-    datasets: Annotated[DdmTrainingCommandRepository, Depends(dependencies.datasets)],
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
 ) -> DdmTrainingCommandView:
-    return _ddm_command_view(
-        read_ddm_training_command(
-            dataset_id=dataset_id,
-            command_id=command_id,
-            caller=caller,
-            datasets=datasets,
-        )
+    return _read_command_view(
+        service=model.TrainingService.DDM,
+        dataset_id=dataset_id,
+        command_id=command_id,
+        caller=caller,
+        datasets=datasets,
+    )
+
+
+@router.get(
+    "/{dataset_id}/vlm-training-commands/{command_id}",
+    response_model=DdmTrainingCommandView,
+    operation_id="readVlmTrainingCommand",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def read_a_vlm_training_command(
+    dataset_id: UUID,
+    command_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
+) -> DdmTrainingCommandView:
+    return _read_command_view(
+        service=model.TrainingService.VLM,
+        dataset_id=dataset_id,
+        command_id=command_id,
+        caller=caller,
+        datasets=datasets,
     )
 
 
@@ -1498,17 +1716,38 @@ def cancel_a_ddm_training_command(
     dataset_id: UUID,
     command_id: UUID,
     caller: Authorized,
-    datasets: Annotated[DdmTrainingCommandRepository, Depends(dependencies.datasets)],
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
 ) -> DdmTrainingCommandView:
     """仅取消尚未进入派发的命令；已派发时返回冲突，不宣称基座已停止。"""
-    return _ddm_command_view(
-        cancel_ddm_training_command(
-            dataset_id=dataset_id,
-            command_id=command_id,
-            caller=caller,
-            now=datetime.now(UTC),
-            datasets=datasets,
-        )
+    return _cancel_command_view(
+        service=model.TrainingService.DDM,
+        dataset_id=dataset_id,
+        command_id=command_id,
+        caller=caller,
+        datasets=datasets,
+    )
+
+
+@router.post(
+    "/{dataset_id}/vlm-training-commands/{command_id}/cancel",
+    response_model=DdmTrainingCommandView,
+    operation_id="cancelVlmTrainingCommand",
+    openapi_extra=needs(Permission.DATASET_EDIT),
+    responses=ProblemResponses,
+)
+def cancel_a_vlm_training_command(
+    dataset_id: UUID,
+    command_id: UUID,
+    caller: Authorized,
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
+) -> DdmTrainingCommandView:
+    """未派发命令直接取消；已派发只记录取消请求，响应文案不证明进程已停止。"""
+    return _cancel_command_view(
+        service=model.TrainingService.VLM,
+        dataset_id=dataset_id,
+        command_id=command_id,
+        caller=caller,
+        datasets=datasets,
     )
 
 
@@ -1524,17 +1763,42 @@ def read_a_ddm_training_result(
     command_id: UUID,
     caller: Authorized,
     request: Request,
-    datasets: Annotated[DdmTrainingCommandRepository, Depends(dependencies.datasets)],
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
 ) -> DdmTrainingResultView:
     """返回结果登记事实与已授权数据通道地址；不在此中转大体积字节。"""
-    command = read_ddm_training_command(
+    return _read_result_view(
+        service=model.TrainingService.DDM,
         dataset_id=dataset_id,
         command_id=command_id,
         caller=caller,
+        request=request,
         datasets=datasets,
     )
-    settings = request.app.state.settings
-    return _ddm_result_view(command, media_origin=settings.annotation_media_origin)
+
+
+@router.get(
+    "/{dataset_id}/vlm-training-commands/{command_id}/result",
+    response_model=DdmTrainingResultView,
+    operation_id="readVlmTrainingResult",
+    openapi_extra=needs(Permission.DATASET_VIEW),
+    responses=ProblemResponses,
+)
+def read_a_vlm_training_result(
+    dataset_id: UUID,
+    command_id: UUID,
+    caller: Authorized,
+    request: Request,
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
+) -> DdmTrainingResultView:
+    """返回 VLM 结果登记事实与已授权数据通道地址；不在此中转大体积字节。"""
+    return _read_result_view(
+        service=model.TrainingService.VLM,
+        dataset_id=dataset_id,
+        command_id=command_id,
+        caller=caller,
+        request=request,
+        datasets=datasets,
+    )
 
 
 @ddm_result_router.get("/authorize", include_in_schema=False)
@@ -1542,26 +1806,30 @@ def authorize_ddm_result(
     command_id: UUID,
     kind: str,
     caller: Authorized,
-    datasets: Annotated[DdmTrainingCommandRepository, Depends(dependencies.datasets)],
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
 ) -> Response:
     """供 Nginx auth_request 子请求；只校验登录用户的 DATASET_VIEW 与结果成员身份。"""
-    if kind not in {"config", "checkpoint"}:
-        return Response(status_code=status.HTTP_403_FORBIDDEN)
-    try:
-        command = authorize_ddm_result_access(
-            command_id=command_id,
-            caller=caller,
-            datasets=datasets,
-        )
-    except DatasetRefusedError:
-        return Response(status_code=status.HTTP_403_FORBIDDEN)
-    object_key = (
-        command.result_config_object_key
-        if kind == "config"
-        else command.result_checkpoint_object_key
+    return _authorize_result_response(
+        service=model.TrainingService.DDM,
+        command_id=command_id,
+        kind=kind,
+        caller=caller,
+        datasets=datasets,
     )
-    assert object_key is not None
-    return Response(
-        status_code=status.HTTP_204_NO_CONTENT,
-        headers={"X-DDM-Result-Object": object_key, "Cache-Control": "no-store"},
+
+
+@vlm_result_router.get("/authorize", include_in_schema=False)
+def authorize_vlm_result(
+    command_id: UUID,
+    kind: str,
+    caller: Authorized,
+    datasets: Annotated[TrainingCommandRepository, Depends(dependencies.datasets)],
+) -> Response:
+    """供 Nginx auth_request 子请求；只校验登录用户的 DATASET_VIEW 与结果成员身份。"""
+    return _authorize_result_response(
+        service=model.TrainingService.VLM,
+        command_id=command_id,
+        kind=kind,
+        caller=caller,
+        datasets=datasets,
     )

@@ -17,6 +17,7 @@ from test_retention_sweep_postgres import NOW, _counts
 from test_retention_sweep_postgres import committed_session as committed_session
 
 from factory_sop.job.adapters.worker import build_worker
+from factory_sop.job.api import JobType
 from factory_sop.persistence import session_factory
 from factory_sop.worker_entrypoint import retention_sweep_runner
 
@@ -46,7 +47,10 @@ def test_native_arq_cron_executes_subminute_cycles(
             usage_runtime=cast(Any, object()),
             artifact_executor=cast(Any, object()),
             annotation_runtime=cast(Any, object()),
-            ddm_executor=cast(Any, object()),
+            training_executors={
+                JobType.DATASET_DDM_TRAINING: cast(Any, object()),
+                JobType.DATASET_VLM_TRAINING: cast(Any, object()),
+            },
             current_caller_resolver=cast(Any, object()),
             retention_sweep=retention_sweep_runner(settings, factory),
         )

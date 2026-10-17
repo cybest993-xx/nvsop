@@ -6,10 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 from uuid import UUID
 
-from factory_sop.job.api import ApplicationJob
+from factory_sop.job.api import ApplicationJob, JobType
 
 
 class MemberStatus(StrEnum):
@@ -100,8 +101,15 @@ class ArtifactStatus(StrEnum):
     FAILED = "failed"
 
 
-class DdmTrainingCommandStatus(StrEnum):
-    """DDM 训练应用命令的持久化状态。
+class TrainingService(StrEnum):
+    """命令归属的训练服务；同一张表按服务区分在途保护与结果命名。"""
+
+    DDM = "ddm"
+    VLM = "vlm"
+
+
+class TrainingCommandStatus(StrEnum):
+    """训练应用命令的持久化状态。
 
     ``bound`` 与 ``result_unknown`` 都是仍在途的保护状态；``failed`` 表示可以证明
     基座未开始或已终止失败；``completed`` 表示基座成功且结果已登记。
@@ -116,14 +124,14 @@ class DdmTrainingCommandStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-class DdmTrainingResultStatus(StrEnum):
-    """DDM 训练结果读回并登记的持久化状态，与应用接受/派发事实分离。"""
+class TrainingResultStatus(StrEnum):
+    """训练结果读回并登记的持久化状态，与应用接受/派发事实分离。"""
 
     NOT_REGISTERED = "not_registered"
     REGISTERED = "registered"
 
 
-class DdmBaseStatus(StrEnum):
+class TrainingBaseStatus(StrEnum):
     """基座状态查询返回的稳定原状态；未知值不在此枚举中，也不映射为完成。"""
 
     QUEUED = "queued"
@@ -131,6 +139,42 @@ class DdmBaseStatus(StrEnum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingResultNaming:
+    """一种训练服务已登记结果的对象键命名：前缀与两个固定文件名。
+
+    写入（adapter）与授权核对（用例）必须使用同一份命名事实，否则授权可能放行未登记对象。
+    """
+
+    prefix: str
+    config_filename: str
+    checkpoint_filename: str
+
+
+TRAINING_RESULT_NAMING: Mapping[TrainingService, TrainingResultNaming] = MappingProxyType(
+    {
+        TrainingService.DDM: TrainingResultNaming(
+            prefix="ddm-results",
+            config_filename="config.yaml",
+            checkpoint_filename="checkpoint.ckpt",
+        ),
+        TrainingService.VLM: TrainingResultNaming(
+            prefix="vlm-results",
+            config_filename="config.toml",
+            checkpoint_filename="checkpoint.manifest.json",
+        ),
+    }
+)
+
+# 每种训练服务对应的通用任务类型：调度器按类型决定是否已配置基座，worker 按类型选执行器。
+TRAINING_SERVICE_JOB_TYPES: Mapping[TrainingService, JobType] = MappingProxyType(
+    {
+        TrainingService.DDM: JobType.DATASET_DDM_TRAINING,
+        TrainingService.VLM: JobType.DATASET_VLM_TRAINING,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,9 +267,11 @@ class DatasetArtifact:
 
 
 @dataclass(frozen=True, slots=True)
-class DdmTrainingCommand:
-    """一次已受理的 DDM 训练应用命令及其冻结输入事实。
+class TrainingCommand:
+    """一次已受理的训练应用命令及其冻结输入事实。
 
+    `service` 指明这是哪一类训练服务的命令：同一张表承载多种服务，但恢复唯一匹配、
+    结果命名与取消入口都由该服务自己的 adapter 决定。
     `payload` 是 dataset 拥有的冻结负载（独立训练/验证输入与按角色消费参数）；
     `status` 为 `pending` 表示已受理但尚未派发，不得解释为训练已开始。应用接受/派发、
     基座原状态与结果登记是三个不同事实：`base_observation` 只保存基座最后返回的原始状态，
@@ -235,7 +281,8 @@ class DdmTrainingCommand:
 
     id: UUID
     dataset_id: UUID
-    status: DdmTrainingCommandStatus
+    service: TrainingService
+    status: TrainingCommandStatus
     idempotency_key: str
     request_digest: str
     payload: Mapping[str, Any]
@@ -254,13 +301,19 @@ class DdmTrainingCommand:
     failure_detail: str | None = None
     cancelled_by: UUID | None = None
     cancelled_at: datetime | None = None
+    # 已派发命令的取消请求与基座原响应：请求只记第一次；``cancel_response`` 保存基座取消
+    # 入口的真实响应，``cancel_detail`` 是本次核实结论（无进程停止证明时保留未核实）。
+    cancel_requested_by: UUID | None = None
+    cancel_requested_at: datetime | None = None
+    cancel_response: Mapping[str, Any] | None = None
+    cancel_detail: str | None = None
     # 最后一次成功读取基座原状态的时刻；查询失败不清空它，也不改写基座原状态。
     last_observed_at: datetime | None = None
     # 查询基座失败的独立诊断；与派发失败/结果失败分离，未知或不可达绝不表示完成。
     observation_failure_code: str | None = None
     observation_failure_detail: str | None = None
     # 结果登记事实：只有真实配置与 checkpoint 核对并登记后才为 registered。
-    result_status: DdmTrainingResultStatus = DdmTrainingResultStatus.NOT_REGISTERED
+    result_status: TrainingResultStatus = TrainingResultStatus.NOT_REGISTERED
     result_generation: int = 0
     result_config_object_key: str | None = None
     result_config_sha256: str | None = None

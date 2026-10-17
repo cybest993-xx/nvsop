@@ -33,13 +33,16 @@ x-center-environment: &center-environment
   SOP_DDM_TRAINING_DATASET_ROOT: /workspace/sop-ddm-ftms/assets/data
   SOP_DDM_TRAINING_RESULTS_ROOT: /workspace/sop-ddm-ftms/assets/results
   SOP_DDM_TRAINING_CONFIG_PATH: /workspace/sop-ddm-ftms/assets/config/ddm_train_config.yaml
+  SOP_VLM_TRAINING_BACKEND_URL: http://vlm-training:32080
+  SOP_VLM_TRAINING_DATASET_ROOT: /workspace/sop-cr-ftms/assets/data
+  SOP_VLM_TRAINING_RESULTS_ROOT: /workspace/sop-cr-ftms/assets/results
   SOP_WORKER_HEALTH_CHECK_INTERVAL_SECONDS: "5"
   # 本地开发实例也运行回收任务：600s 周期、每表每轮 256 行；生产按部署覆写。
   SOP_RETENTION_SWEEP_INTERVAL_SECONDS: "600"
   SOP_RETENTION_SWEEP_BATCH_LIMIT: "256"
   SOP_LOG_LEVEL: info
-  NO_PROXY: center-db,redis,annotation-backend,localhost,127.0.0.1
-  no_proxy: center-db,redis,annotation-backend,localhost,127.0.0.1
+  NO_PROXY: center-db,redis,annotation-backend,ddm-training,vlm-training,localhost,127.0.0.1
+  no_proxy: center-db,redis,annotation-backend,ddm-training,vlm-training,localhost,127.0.0.1
 
 services:
   center-db:
@@ -249,6 +252,8 @@ services:
       - ddm-dataset:/workspace/sop-ddm-ftms/assets/data
       - ddm-results:/workspace/sop-ddm-ftms/assets/results:ro
       - ${NVSOP_SOURCE_DIR:-.}/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/assets/config:/workspace/sop-ddm-ftms/assets/config:ro
+      - vlm-dataset:/workspace/sop-cr-ftms/assets/data
+      - vlm-results:/workspace/sop-cr-ftms/assets/results:ro
     secrets:
       - nvsop-runtime-password
       - redis-url
@@ -340,6 +345,16 @@ services:
       POSTGRES_USER: training_runtime
       POSTGRES_PASSWORD_FILE: /run/secrets/training-runtime-password
       SERVICE_PORT: "32080"
+      CONFIG_PATH: /workspace/sop-cr-ftms/assets/config
+      TRAIN_CONFIG_NAME: train_config.toml
+      TOOL_PATH: /workspace/sop-cr-ftms/assets/tools
+      DATASET_ROOT: /workspace/sop-cr-ftms/assets/data
+      RESULTS_ROOT: /workspace/sop-cr-ftms/assets/results
+    volumes:
+      - vlm-dataset:/workspace/sop-cr-ftms/assets/data
+      - vlm-results:/workspace/sop-cr-ftms/assets/results
+      - ${NVSOP_SOURCE_DIR:-.}/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/cr-training-ms/assets/config:/workspace/sop-cr-ftms/assets/config:ro
+      - ${NVSOP_SOURCE_DIR:-.}/vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/cr-training-ms/assets/tools:/workspace/sop-cr-ftms/assets/tools:ro
     deploy:
       resources:
         reservations:
@@ -493,6 +508,10 @@ volumes:
     name: nvsop-dev-main-ddm-dataset
   ddm-results:
     name: nvsop-dev-main-ddm-results
+  vlm-dataset:
+    name: nvsop-dev-main-vlm-dataset
+  vlm-results:
+    name: nvsop-dev-main-vlm-results
 
 secrets:
   center-db-password:

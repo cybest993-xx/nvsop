@@ -50,10 +50,8 @@ from factory_sop.dataset.model import (
     UsageKind,
 )
 from factory_sop.dataset.storage import ObjectStorage
-from factory_sop.dataset.usecases.ddm_command import (
-    DdmTrainingCommandResult,
-    request_ddm_training_command,
-)
+from factory_sop.dataset.usecases.ddm_command import request_ddm_training_command
+from factory_sop.dataset.usecases.training_command import TrainingCommandResult
 from factory_sop.dataset.usecases.usage import (
     DDM_CONSUMER_PARAMETERS,
     DdmInputSelection,
@@ -407,7 +405,7 @@ def _submit(
     training: DdmInputSelection,
     validation: DdmInputSelection,
     dispatch: Callable[[UUID], None] | None = None,
-) -> DdmTrainingCommandResult:
+) -> TrainingCommandResult:
     with session_factory(engine)() as session:
         result = request_ddm_training_command(
             training=training,
@@ -484,7 +482,7 @@ def test_ddm_command_outbox_atomicity_and_held_dispatch(
         assert (
             row(
                 engine,
-                "SELECT count(*) FROM dataset_ddm_training_command WHERE dataset_id = :dataset_id",
+                "SELECT count(*) FROM dataset_training_command WHERE dataset_id = :dataset_id",
                 dataset_id=training_id,
             )[0]
             == 0
@@ -519,7 +517,7 @@ def test_ddm_command_outbox_atomicity_and_held_dispatch(
         assert woke == [submitted.job.id]
         command_facts = row(
             engine,
-            "SELECT status, job_id FROM dataset_ddm_training_command "
+            "SELECT status, job_id FROM dataset_training_command "
             "WHERE idempotency_key = 'ddm-commit'",
         )
         assert tuple(command_facts) == ("pending", submitted.job.id)
@@ -612,7 +610,7 @@ def test_ddm_command_replay_conflict_and_concurrent_submission(
         assert (
             row(
                 engine,
-                "SELECT count(*) FROM dataset_ddm_training_command "
+                "SELECT count(*) FROM dataset_training_command "
                 "WHERE idempotency_key = 'ddm-replay'",
             )[0]
             == 1
@@ -646,7 +644,7 @@ def test_ddm_command_replay_conflict_and_concurrent_submission(
         assert (
             row(
                 engine,
-                "SELECT count(*) FROM dataset_ddm_training_command "
+                "SELECT count(*) FROM dataset_training_command "
                 "WHERE idempotency_key = 'ddm-concurrent'",
             )[0]
             == 1
@@ -655,7 +653,7 @@ def test_ddm_command_replay_conflict_and_concurrent_submission(
             row(
                 engine,
                 "SELECT count(*) FROM job_application_job j "
-                "JOIN dataset_ddm_training_command c ON c.job_id = j.id "
+                "JOIN dataset_training_command c ON c.job_id = j.id "
                 "WHERE c.idempotency_key = 'ddm-concurrent'",
             )[0]
             == 1

@@ -778,6 +778,8 @@
           "ARTIFACT_UNAVAILABLE",
           "DDM_TRAINING_COMMAND_NOT_FOUND",
           "DDM_TRAINING_RESULT_NOT_FOUND",
+          "VLM_TRAINING_COMMAND_NOT_FOUND",
+          "VLM_TRAINING_RESULT_NOT_FOUND",
           "JOB_NOT_FOUND",
           "JOB_RESOURCE_NOT_FOUND",
           "ACTIVE_GRANT_EXISTS",
@@ -2678,7 +2680,7 @@
         "type": "object"
       },
       "DdmTrainingCommandView": {
-        "description": "DDM 训练命令的公开事实。\n\n只暴露应用状态、基座原状态/观测时刻/查询诊断与结果登记事实；冻结负载、内部路径、\n媒体身份与消费摘要不进入公开响应。",
+        "description": "一条训练命令的公开事实（DDM 与 VLM 共用同一形状）。\n\nschema 名由已发布契约冻结（ADR-0003）：这里是同一份 wire 事实，不是 DDM 专属字段。\n\n只暴露应用状态、基座原状态/观测时刻/查询诊断与结果登记事实；冻结负载、内部路径、\n媒体身份与消费摘要不进入公开响应。",
         "properties": {
           "base_current_step": {
             "anyOf": [
@@ -6395,6 +6397,22 @@
           "declared_size"
         ],
         "title": "RequestVideoUploadInput",
+        "type": "object"
+      },
+      "RequestVlmTrainingCommandInput": {
+        "additionalProperties": false,
+        "description": "受理一条 VLM 训练命令所需的已通过用途检查。",
+        "properties": {
+          "usage_check_id": {
+            "format": "uuid",
+            "title": "Usage Check Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "usage_check_id"
+        ],
+        "title": "RequestVlmTrainingCommandInput",
         "type": "object"
       },
       "RequestedStatus": {
@@ -25313,6 +25331,600 @@
           }
         },
         "summary": "Read A Vlm Candidate",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-training-commands": {
+      "get": {
+        "description": "重新打开页面后按数据集恢复原 VLM 命令，不依赖页面内缓存。",
+        "operationId": "listVlmTrainingCommands",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_DdmTrainingCommandView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "List The Vlm Training Commands",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      },
+      "post": {
+        "description": "受理一条 VLM 训练命令；返回 ``pending`` 只表示已受理，绝不表示训练已开始。",
+        "operationId": "requestVlmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestVlmTrainingCommandInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandAcceptedView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Request A Vlm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}": {
+      "get": {
+        "operationId": "readVlmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Vlm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/cancel": {
+      "post": {
+        "description": "未派发命令直接取消；已派发只记录取消请求，响应文案不证明进程已停止。",
+        "operationId": "cancelVlmTrainingCommand",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingCommandView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Cancel A Vlm Training Command",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/vlm-training-commands/{command_id}/result": {
+      "get": {
+        "description": "返回 VLM 结果登记事实与已授权数据通道地址；不在此中转大体积字节。",
+        "operationId": "readVlmTrainingResult",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DdmTrainingResultView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集、视频或上传尝试不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "视频当前状态不允许该操作"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求或视频校验无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练素材存储或媒体探测暂时不可用"
+          }
+        },
+        "summary": "Read A Vlm Training Result",
         "tags": [
           "dataset"
         ],

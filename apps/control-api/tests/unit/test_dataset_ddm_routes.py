@@ -17,12 +17,13 @@ from factory_sop.auth.permissions import Permission
 from factory_sop.auth.usecases.sessions import RestoredSession
 from factory_sop.dataset.adapters import dependencies as dataset_dependencies
 from factory_sop.dataset.model import (
-    DdmTrainingCommand,
-    DdmTrainingCommandStatus,
-    DdmTrainingResultStatus,
+    TrainingCommand,
+    TrainingCommandStatus,
     TrainingDataset,
+    TrainingResultStatus,
+    TrainingService,
 )
-from factory_sop.dataset.repository import DdmTrainingCommandRepository
+from factory_sop.dataset.repository import TrainingCommandRepository
 from factory_sop.persistence import request_session
 from factory_sop.settings import Settings
 
@@ -59,7 +60,7 @@ class _StubSession:
 class _DdmDatasets:
     """只实现 DDM 命令查询所需的最小仓储；不接触真实数据库。"""
 
-    def __init__(self, command: DdmTrainingCommand) -> None:
+    def __init__(self, command: TrainingCommand) -> None:
         self._command = command
 
     def dataset_by_id(self, dataset_id: UUID) -> TrainingDataset | None:
@@ -74,26 +75,48 @@ class _DdmDatasets:
             updated_at=NOW,
         )
 
-    def list_ddm_training_commands(self, dataset_id: UUID) -> list[DdmTrainingCommand]:
-        return [self._command] if dataset_id == DATASET_ID else []
+    def list_training_commands(
+        self, *, service: TrainingService, dataset_id: UUID
+    ) -> list[TrainingCommand]:
+        if dataset_id != DATASET_ID or service is not self._command.service:
+            return []
+        return [self._command]
 
-    def ddm_training_command_by_id(self, command_id: UUID) -> DdmTrainingCommand | None:
+    def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
         return self._command if command_id == self._command.id else None
 
-    def cancel_pending_ddm_training_command(
+    def cancel_pending_training_command(
         self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
     ) -> bool:
         if (
             self._command.dataset_id != dataset_id
             or self._command.id != command_id
-            or self._command.status is not DdmTrainingCommandStatus.PENDING
+            or self._command.status is not TrainingCommandStatus.PENDING
         ):
             return False
         self._command = replace(
             self._command,
-            status=DdmTrainingCommandStatus.CANCELLED,
+            status=TrainingCommandStatus.CANCELLED,
             cancelled_by=actor_id,
             cancelled_at=now,
+            updated_at=now,
+        )
+        return True
+
+    def request_training_cancellation(
+        self, *, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> bool:
+        if (
+            self._command.id != command_id
+            or self._command.status
+            not in {TrainingCommandStatus.BOUND, TrainingCommandStatus.RESULT_UNKNOWN}
+            or self._command.cancel_requested_at is not None
+        ):
+            return False
+        self._command = replace(
+            self._command,
+            cancel_requested_by=actor_id,
+            cancel_requested_at=now,
             updated_at=now,
         )
         return True
@@ -118,14 +141,13 @@ def _caller(permissions: frozenset[Permission]) -> RestoredSession:
     )
 
 
-def _command(*, result_registered: bool) -> DdmTrainingCommand:
-    return DdmTrainingCommand(
+def _command(*, result_registered: bool) -> TrainingCommand:
+    return TrainingCommand(
         id=COMMAND_ID,
         dataset_id=DATASET_ID,
+        service=TrainingService.DDM,
         status=(
-            DdmTrainingCommandStatus.COMPLETED
-            if result_registered
-            else DdmTrainingCommandStatus.BOUND
+            TrainingCommandStatus.COMPLETED if result_registered else TrainingCommandStatus.BOUND
         ),
         idempotency_key="route-key",
         request_digest="a" * 64,
@@ -139,9 +161,9 @@ def _command(*, result_registered: bool) -> DdmTrainingCommand:
         base_observation={"status": "running", "progress": 0.5},
         last_observed_at=NOW,
         result_status=(
-            DdmTrainingResultStatus.REGISTERED
+            TrainingResultStatus.REGISTERED
             if result_registered
-            else DdmTrainingResultStatus.NOT_REGISTERED
+            else TrainingResultStatus.NOT_REGISTERED
         ),
         result_generation=1 if result_registered else 0,
         result_config_sha256="b" * 64 if result_registered else None,
@@ -167,7 +189,7 @@ def _client(datasets: _DdmDatasets, permissions: frozenset[Permission]) -> TestC
     app.dependency_overrides[auth_dependencies.authenticated_caller] = lambda: _caller(permissions)
     app.dependency_overrides[auth_dependencies.granted_permissions] = lambda: permissions
     app.dependency_overrides[dataset_dependencies.datasets] = lambda: cast(
-        DdmTrainingCommandRepository, datasets
+        TrainingCommandRepository, datasets
     )
     app.dependency_overrides[request_session] = _StubSession
     return TestClient(app)
@@ -209,7 +231,7 @@ def test_list_and_read_expose_observation_and_result_without_payload() -> None:
 def test_cancel_pending_replays_first_fact_and_exposes_it_on_read() -> None:
     pending = replace(
         _command(result_registered=False),
-        status=DdmTrainingCommandStatus.PENDING,
+        status=TrainingCommandStatus.PENDING,
         base_job_id=None,
         base_observation=None,
     )
@@ -244,14 +266,42 @@ def test_cancel_checks_permissions_ownership_and_dispatch_state() -> None:
             assert denied.status_code == 403, denied.text
     with _client(datasets, frozenset({Permission.DATASET_EDIT})) as client:
         dispatched = client.post(path)
-        assert dispatched.status_code == 409
-        assert dispatched.json()["error_code"] == "USAGE_STATE_CONFLICT"
-        assert "不证明基座已停止" in dispatched.json()["detail"]
+        assert dispatched.status_code == 200, dispatched.text
+        requested = dispatched.json()
+        assert requested["status"] == "bound"
+        assert requested["cancel_requested_by"] == str(ACTOR_ID)
+        assert requested["cancel_requested_at"].endswith("Z")
+        assert requested["cancelled_by"] is None
+        assert "payload" not in requested
+        # 重复请求幂等：保留首次请求者与时刻。
+        assert client.post(path).json() == requested
         missing = client.post(path.replace(str(COMMAND_ID), str(ACTOR_ID)))
         mismatch = client.post(path.replace(str(DATASET_ID), str(ACTOR_ID)))
         for response in (missing, mismatch):
             assert response.status_code == 404
             assert response.json()["error_code"] == "DDM_TRAINING_COMMAND_NOT_FOUND"
+
+
+def test_cancel_refuses_terminal_commands_without_touching_history() -> None:
+    path = f"{API_PREFIX}/training-datasets/{DATASET_ID}/ddm-training-commands/{COMMAND_ID}/cancel"
+    for terminal in (TrainingCommandStatus.COMPLETED, TrainingCommandStatus.FAILED):
+        command = replace(_command(result_registered=terminal is TrainingCommandStatus.COMPLETED))
+        datasets = _DdmDatasets(replace(command, status=terminal))
+        with _client(
+            datasets, frozenset({Permission.DATASET_EDIT, Permission.DATASET_VIEW})
+        ) as client:
+            refused = client.post(path)
+            assert refused.status_code == 409, refused.text
+            assert refused.json()["error_code"] == "USAGE_STATE_CONFLICT"
+            assert "历史事实保持不变" in refused.json()["detail"]
+            # 已结束命令不被改写：不留下取消请求或取消事实。
+            after = client.get(
+                f"{API_PREFIX}/training-datasets/{DATASET_ID}/ddm-training-commands/{COMMAND_ID}"
+            ).json()
+            assert after["status"] == terminal.value
+            assert after["cancel_requested_at"] is None
+            assert after["cancelled_at"] is None
+            assert after["result_status"] == command.result_status.value
 
 
 def test_unregistered_result_has_no_access_url() -> None:

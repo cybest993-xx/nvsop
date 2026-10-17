@@ -36,12 +36,12 @@ from factory_sop.dataset.api import (
     DatasetRefusedError,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
-    DdmTrainingJobExecutor,
-    DdmTrainingJobOutcome,
-    DdmTrainingJobResult,
     MediaProbeUnavailableError,
     MemberStatus,
     ObjectStorageUnavailableError,
+    TrainingJobExecutor,
+    TrainingJobOutcome,
+    TrainingJobResult,
     UsageCheckStatus,
     UsageCheckTarget,
     UsageKind,
@@ -794,13 +794,31 @@ async def dispatch_ddm_training_job(ctx: Mapping[str, Any], job_id: str) -> None
     await _run_blocking_job(_dispatch_ddm_training_job, ctx, job_id)
 
 
+async def dispatch_vlm_training_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """隔离同步 VLM 训练命令推进，不阻塞 ARQ 事件循环。"""
+    await _run_blocking_job(_dispatch_vlm_training_job, ctx, job_id)
+
+
 def _dispatch_ddm_training_job(ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence) -> None:
-    """领取 DDM 训练任务并委托 dataset owner 查询/登记；无结果可读时不重发训练。"""
+    _dispatch_training_job(ctx, job_id, fence, job_type=JobType.DATASET_DDM_TRAINING)
+
+
+def _dispatch_vlm_training_job(ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence) -> None:
+    _dispatch_training_job(ctx, job_id, fence, job_type=JobType.DATASET_VLM_TRAINING)
+
+
+def _dispatch_training_job(
+    ctx: Mapping[str, Any], job_id: str, fence: _ExecutionFence, *, job_type: JobType
+) -> None:
+    """领取训练任务并委托 dataset owner 查询/登记；无结果可读时不重发训练。
+
+    两种训练服务共用同一段推进逻辑，只按任务类型选各自的 adapter 执行器。
+    """
     if fence.cancelled:
         return
     identifier = UUID(job_id)
     factory = _session_factory(ctx)
-    executor = _ddm_executor(ctx)
+    executor = _training_executor(ctx, job_type)
     now = datetime.now(UTC)
     with factory() as session:
         jobs = PostgresJobRepository(session)
@@ -810,16 +828,16 @@ def _dispatch_ddm_training_job(ctx: Mapping[str, Any], job_id: str, fence: _Exec
     if running is None:
         return
 
-    def finish_job(session: object, result: DdmTrainingJobResult) -> bool:
+    def finish_job(session: object, result: TrainingJobResult) -> bool:
         if fence.cancelled:
             return False
         terminal_status = {
-            DdmTrainingJobOutcome.COMPLETED: JobStatus.SUCCEEDED,
-            DdmTrainingJobOutcome.FAILED: JobStatus.FAILED,
-            DdmTrainingJobOutcome.CANCELLED: JobStatus.SUPERSEDED,
+            TrainingJobOutcome.COMPLETED: JobStatus.SUCCEEDED,
+            TrainingJobOutcome.FAILED: JobStatus.FAILED,
+            TrainingJobOutcome.CANCELLED: JobStatus.SUPERSEDED,
         }.get(result.outcome)
         if terminal_status is None:
-            raise RuntimeError("DDM executor requested a non-terminal job finish")
+            raise RuntimeError("训练执行器请求了非终态的任务收尾")
         return PostgresJobRepository(cast(Session, session)).finish(
             job_id=running.id,
             status=terminal_status.value,
@@ -838,9 +856,9 @@ def _dispatch_ddm_training_job(ctx: Mapping[str, Any], job_id: str, fence: _Exec
         finish_job=finish_job,
         commit_transaction=commit_transaction,
     )
-    if result.outcome is DdmTrainingJobOutcome.PENDING and not fence.cancelled:
+    if result.outcome is TrainingJobOutcome.PENDING and not fence.cancelled:
         with factory() as session:
-            if not PostgresJobRepository(session).defer_ddm_training_poll(
+            if not PostgresJobRepository(session).defer_training_poll(
                 job_id=running.id,
                 expected_updated_at=running.updated_at,
                 now=datetime.now(UTC),
@@ -1689,7 +1707,7 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
     with factory() as session:
         pending = PostgresJobRepository(session).pending(
             limit=100,
-            include_ddm_training=dispatcher.ddm_training_configured,
+            configured_training_types=dispatcher.configured_training_types,
             include_augmentation=dispatcher.augmentation_configured,
         )
     for job in pending:
@@ -1718,7 +1736,7 @@ def build_worker(
     usage_runtime: DatasetUsageRuntime,
     artifact_executor: DatasetArtifactExecutor,
     annotation_runtime: DatasetAnnotationRuntime,
-    ddm_executor: DdmTrainingJobExecutor,
+    training_executors: Mapping[JobType, TrainingJobExecutor],
     current_caller_resolver: CurrentCallerResolver,
     augmentation_executor: DatasetCommandExecutor | None = None,
     retention_sweep: Callable[[], None] | None = None,
@@ -1733,6 +1751,7 @@ def build_worker(
             prepare_annotation_context_job,
             annotate_dataset_job,
             dispatch_ddm_training_job,
+            dispatch_vlm_training_job,
         ]
         + ([augment_dataset_job] if augmentation_executor is not None else []),
         cron_jobs=[
@@ -1766,7 +1785,7 @@ def build_worker(
             "usage_runtime": usage_runtime,
             "artifact_executor": artifact_executor,
             "annotation_runtime": annotation_runtime,
-            "ddm_executor": ddm_executor,
+            "training_executors": dict(training_executors),
             "augmentation_executor": augmentation_executor,
             "current_caller_resolver": current_caller_resolver,
             "retention_sweep": retention_sweep,
@@ -1803,11 +1822,12 @@ def _annotation_runtime(ctx: Mapping[str, Any]) -> DatasetAnnotationRuntime:
     return cast(DatasetAnnotationRuntime, value)
 
 
-def _ddm_executor(ctx: Mapping[str, Any]) -> DdmTrainingJobExecutor:
-    value = ctx.get("ddm_executor")
+def _training_executor(ctx: Mapping[str, Any], job_type: JobType) -> TrainingJobExecutor:
+    executors = cast(Mapping[JobType, TrainingJobExecutor], ctx.get("training_executors") or {})
+    value = executors.get(job_type)
     if value is None:
-        raise RuntimeError("worker 未装配 DDM 训练执行器")
-    return cast(DdmTrainingJobExecutor, value)
+        raise RuntimeError(f"worker 未装配训练执行器：{job_type.value}")
+    return value
 
 
 def _session_factory(ctx: Mapping[str, Any]) -> sessionmaker[Session]:
@@ -1833,7 +1853,8 @@ def run_worker(
     runtime_factory: Callable[[Settings], DatasetValidationRuntime],
     usage_runtime_factory: Callable[[Settings], DatasetUsageRuntime],
     annotation_runtime_factory: Callable[[Settings], DatasetAnnotationRuntime],
-    ddm_executor_factory: Callable[[Settings, sessionmaker[Session]], DdmTrainingJobExecutor],
+    ddm_executor_factory: Callable[[Settings, sessionmaker[Session]], TrainingJobExecutor],
+    vlm_executor_factory: Callable[[Settings, sessionmaker[Session]], TrainingJobExecutor],
     current_caller_resolver_factory: Callable[[sessionmaker[Session]], CurrentCallerResolver],
     augmentation_executor_factory: Callable[
         [Settings, sessionmaker[Session]], DatasetCommandExecutor | None
@@ -1851,7 +1872,10 @@ def run_worker(
     runtime = runtime_factory(settings)
     usage_runtime = usage_runtime_factory(settings)
     annotation_runtime = annotation_runtime_factory(settings)
-    ddm_executor = ddm_executor_factory(settings, factory)
+    training_executors = {
+        JobType.DATASET_DDM_TRAINING: ddm_executor_factory(settings, factory),
+        JobType.DATASET_VLM_TRAINING: vlm_executor_factory(settings, factory),
+    }
     current_caller_resolver = current_caller_resolver_factory(factory)
     retention_sweep = (
         None if retention_sweep_factory is None else retention_sweep_factory(settings, factory)
@@ -1864,7 +1888,7 @@ def run_worker(
         usage_runtime=usage_runtime,
         artifact_executor=artifact_executor,
         annotation_runtime=annotation_runtime,
-        ddm_executor=ddm_executor,
+        training_executors=training_executors,
         augmentation_executor=(
             augmentation_executor_factory(settings, factory)
             if augmentation_executor_factory is not None

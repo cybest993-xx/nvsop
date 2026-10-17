@@ -8,14 +8,16 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, case, select, true, update
+from sqlalchemy import CursorResult, case, or_, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
 
 from factory_sop.identifiers import new_id
 from factory_sop.job.adapters.tables import ApplicationJobRow
-from factory_sop.job.api import ApplicationJob, JobStatus, JobType
+from factory_sop.job.api import TRAINING_JOB_TYPES, ApplicationJob, JobStatus, JobType
 from factory_sop.persistence import register_after_commit
+
+_TRAINING_JOB_TYPE_VALUES = tuple(job_type.value for job_type in TRAINING_JOB_TYPES)
 
 
 class PostgresJobRepository:
@@ -213,16 +215,20 @@ class PostgresJobRepository:
             now=now,
         )
 
-    def get_or_create_ddm_training(
-        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    def get_or_create_training(
+        self,
+        *,
+        job_type: JobType,
+        dataset_id: UUID,
+        command_id: UUID,
+        now: datetime,
     ) -> ApplicationJob:
-        """为一条 DDM 训练命令创建或复用待派发任务。
+        """为一条训练命令创建或复用待派发任务。
 
-        S073/S074 安全派发就绪前，命令任务只在 PostgreSQL outbox 中保持 ``pending``；
-        这里登记提交后唤醒，但 dispatcher 会识别该类型并显式不投递，也不重开同一条
-        已失败命令（显式重试必须用新的命令身份）。
+        job 类型由调用方按训练服务给出。命令任务先在 PostgreSQL outbox 中保持 ``pending``；
+        dispatcher 对未配置对应基座的类型显式不投递，也不重开同一条已失败命令（显式重试
+        必须用新的命令身份）。
         """
-        job_type = JobType.DATASET_DDM_TRAINING
         existing = self._by_attempt_type(attempt_id=command_id, job_type=job_type)
         if existing is not None:
             self._remember_for_dispatch(existing.id)
@@ -488,7 +494,7 @@ class PostgresJobRepository:
         )
         return result.rowcount == 1
 
-    def defer_ddm_training_poll(
+    def defer_training_poll(
         self, *, job_id: UUID, expected_updated_at: datetime, now: datetime
     ) -> bool:
         """原任务观测未终结：归还当前租约，下一 outbox 扫描只查询同一命令。"""
@@ -519,10 +525,14 @@ class PostgresJobRepository:
         return result.rowcount == 1
 
     def pending(
-        self, *, limit: int, include_ddm_training: bool = False, include_augmentation: bool = False
+        self,
+        *,
+        limit: int,
+        configured_training_types: frozenset[JobType] = frozenset(),
+        include_augmentation: bool = False,
     ) -> list[ApplicationJob]:
-        # held 类型（DDM 训练命令）由已知派发放行策略保留为 pending；扫描器在 ORDER/LIMIT
-        # 之前排除它，避免大量 held 行占满窗口并饿死后面可执行的任务。
+        # held 类型（训练命令）由已知派发放行策略保留为 pending；扫描器在 ORDER/LIMIT 之前
+        # 排除未配置基座的训练任务，避免大量 held 行占满窗口并饿死后面可执行的任务。
         rows = self._session.scalars(
             select(ApplicationJobRow)
             .where(ApplicationJobRow.outbox_status == "pending")
@@ -532,9 +542,12 @@ class PostgresJobRepository:
                 )
             )
             .where(
-                true()
-                if include_ddm_training
-                else ApplicationJobRow.job_type != JobType.DATASET_DDM_TRAINING.value
+                or_(
+                    ApplicationJobRow.job_type.not_in(_TRAINING_JOB_TYPE_VALUES),
+                    ApplicationJobRow.job_type.in_(
+                        tuple(job_type.value for job_type in configured_training_types)
+                    ),
+                )
             )
             .where(
                 true()
@@ -604,10 +617,16 @@ class PostgresUsageJobQueue:
             now=now,
         )
 
-    def get_or_create_ddm_training(
-        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    def get_or_create_training(
+        self,
+        *,
+        job_type: JobType,
+        dataset_id: UUID,
+        command_id: UUID,
+        now: datetime,
     ) -> ApplicationJob:
-        return self._repository.get_or_create_ddm_training(
+        return self._repository.get_or_create_training(
+            job_type=job_type,
             dataset_id=dataset_id,
             command_id=command_id,
             now=now,

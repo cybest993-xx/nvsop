@@ -24,16 +24,18 @@ from test_ddm_training_command import NOW, _caller, _FakeStorage, _seed_passing_
 from factory_sop.auth.api import Caller, Permission
 from factory_sop.dataset.adapters.ddm import LocalDdmResultVolume, NvidiaDdmAnnotationGenerator
 from factory_sop.dataset.adapters.ddm_execution import (
-    DdmTrainingBackend,
-    DdmTrainingDispatchOutcome,
-    DdmTrainingDispatchResult,
+    DdmTrainingServiceAdapter,
     HttpDdmTrainingBackend,
-    PostgresDdmTrainingExecutor,
 )
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
-from factory_sop.dataset.api import DdmTrainingJobResult
-from factory_sop.dataset.model import DdmTrainingCommand, DdmTrainingCommandStatus
+from factory_sop.dataset.adapters.training_execution import (
+    PostgresTrainingCommandExecutor,
+    TrainingDispatchOutcome,
+    TrainingDispatchResult,
+)
+from factory_sop.dataset.api import TrainingJobResult
+from factory_sop.dataset.model import TrainingCommand, TrainingCommandStatus
 from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases.usage import (
     DDM_CONSUMER_PARAMETERS,
@@ -71,7 +73,7 @@ class _BackendAcceptedThenInterrupted(BaseException):
 class _InterruptingBackend:
     """代理真实 HTTP 基座，但在 start 已创建任务后抛 BaseException 模拟发送后崩溃。"""
 
-    def __init__(self, inner: DdmTrainingBackend) -> None:
+    def __init__(self, inner: HttpDdmTrainingBackend) -> None:
         self._inner = inner
 
     def start(self, *, training_dataset_id: str, validation_dataset_id: str) -> str:
@@ -86,6 +88,9 @@ class _InterruptingBackend:
 
     def status(self, job_id: str) -> Mapping[str, Any]:
         return self._inner.status(job_id)
+
+    def cancel(self, job_id: str) -> Mapping[str, Any]:
+        return self._inner.cancel(job_id=job_id)
 
 
 class _IntentCommitUncertainSession(Session):
@@ -128,10 +133,13 @@ def executor(
     root: Path,
     server: Any,  # noqa: ANN401 — 动态加载的 HTTP fixture
     **overrides: Any,  # noqa: ANN401 — 按需覆盖受信组合参数
-) -> PostgresDdmTrainingExecutor:
-    options: dict[str, Any] = {
+) -> PostgresTrainingCommandExecutor:
+    """构造真实组合：共享执行器 + DDM 服务 adapter；覆盖项按所属层分流。"""
+    executor_options: dict[str, Any] = {
         "factory": session_factory(engine),
         "storage_factory": lambda: cast(ObjectStorage, Storage()),
+    }
+    adapter_options: dict[str, Any] = {
         "generate": NvidiaDdmAnnotationGenerator().generate,
         "backend": HttpDdmTrainingBackend(base_url=server.url, timeout_seconds=2),
         "backend_target": server.url,
@@ -139,11 +147,17 @@ def executor(
         "training_consumer_parameters": DDM_CONSUMER_PARAMETERS,
         "validation_consumer_parameters": DDM_VALIDATION_CONSUMER_PARAMETERS,
     }
-    options.update(overrides)
-    return PostgresDdmTrainingExecutor(**options)
+    for key, value in overrides.items():
+        if key in executor_options:
+            executor_options[key] = value
+        else:
+            adapter_options[key] = value
+    return PostgresTrainingCommandExecutor(
+        **executor_options, adapter=DdmTrainingServiceAdapter(**adapter_options)
+    )
 
 
-def run(worker: PostgresDdmTrainingExecutor, command_id: UUID) -> DdmTrainingDispatchResult:
+def run(worker: PostgresTrainingCommandExecutor, command_id: UUID) -> TrainingDispatchResult:
     return worker.execute(
         command_id=command_id,
         now=NOW,
@@ -161,7 +175,7 @@ def test_normal_response_and_redelivery_only_poll_original_job(
     )
     with DdmHttpServer() as server:
         first = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert first.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert first.outcome is TrainingDispatchOutcome.BOUND
         assert first.command is not None
         assert first.command.base_job_id in server.jobs
         # BOUND 后成功在途输入必须保留：清理绝不能销毁基座正在读取的输入。
@@ -186,11 +200,11 @@ def test_full_one_shot_intent_is_durable_before_start(
     )
     with DdmHttpServer() as server:
         old_id = server.add_job(f"ddm-{submitted.command.id}-training")
-        observed: list[DdmTrainingCommand] = []
+        observed: list[TrainingCommand] = []
 
         def inspect_intent() -> None:
             with session_factory(engine)() as session:
-                command = PostgresDatasetRepository(session).ddm_training_command_by_id(
+                command = PostgresDatasetRepository(session).training_command_by_id(
                     submitted.command.id
                 )
             assert command is not None
@@ -226,13 +240,13 @@ def test_post_send_errors_are_unknown_then_only_unique_new_job_binds(
     with DdmHttpServer() as server:
         server.start_error = http_error
         result = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert result.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert result.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         # result_unknown 期间必须保留本次准备的在途输入，等待唯一恢复绑定。
         assert (tmp_path / submitted.command.payload["input_id"]).is_dir()
         assert (tmp_path / f"ddm-{submitted.command.id}-training").is_dir()
         assert (tmp_path / f"ddm-{submitted.command.id}-validation").is_dir()
         recovered = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert recovered.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert recovered.outcome is TrainingDispatchOutcome.BOUND
         assert recovered.command is not None
         assert recovered.command.base_job_id in server.jobs
         assert len(server.starts) == 1
@@ -248,7 +262,7 @@ def test_parallel_workers_never_duplicate_start(
     )
     with DdmHttpServer() as server:
         barrier = threading.Barrier(2)
-        results: list[DdmTrainingDispatchResult] = []
+        results: list[TrainingDispatchResult] = []
 
         def work() -> None:
             barrier.wait(timeout=30)
@@ -260,7 +274,7 @@ def test_parallel_workers_never_duplicate_start(
         bound_ids = {
             result.command.base_job_id
             for result in results
-            if result.outcome is DdmTrainingDispatchOutcome.BOUND and result.command is not None
+            if result.outcome is TrainingDispatchOutcome.BOUND and result.command is not None
         }
         assert len(bound_ids) == 1
         assert next(iter(bound_ids)) in server.jobs
@@ -278,15 +292,15 @@ def test_zero_match_retains_guard_and_blocks_second_command(
         server.accept = False
         server.start_error = 502
         result = run(executor(engine, tmp_path, server), first.command.id)
-        assert result.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert result.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         recovered = run(executor(engine, tmp_path, server), first.command.id)
-        assert recovered.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert recovered.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         assert len(server.starts) == 1
         second = _submit(
             engine, idempotency_key="zero-second", training=selections[0], validation=selections[1]
         )
         blocked = run(executor(engine, tmp_path, server), second.command.id)
-        assert blocked.outcome is DdmTrainingDispatchOutcome.BLOCKED
+        assert blocked.outcome is TrainingDispatchOutcome.BLOCKED
         assert blocked.failure_code == "DISPATCH_IN_FLIGHT"
         assert len(server.starts) == 1
 
@@ -302,10 +316,10 @@ def test_multiple_matches_retain_guard(
     with DdmHttpServer() as server:
         server.start_error = 502
         result = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert result.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert result.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         server.add_job(f"ddm-{submitted.command.id}-training")
         recovered = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert recovered.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert recovered.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         assert recovered.failure_code == "DISPATCH_RESULT_UNVERIFIED"
         assert len(server.starts) == 1
 
@@ -322,11 +336,11 @@ def test_unreachable_query_retains_guard(
         server.start_error = 502
         assert (
             run(executor(engine, tmp_path, server), submitted.command.id).outcome
-            is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+            is TrainingDispatchOutcome.RESULT_UNKNOWN
         )
         server.query_error = True
         recovered = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert recovered.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert recovered.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         assert recovered.failure_code == "BASE_UNREACHABLE"
         assert len(server.starts) == 1
 
@@ -343,11 +357,11 @@ def test_malformed_query_identity_stays_unknown_without_binding(
         server.start_error = 502
         assert (
             run(executor(engine, tmp_path, server), submitted.command.id).outcome
-            is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+            is TrainingDispatchOutcome.RESULT_UNKNOWN
         )
         server.add_malformed_job(aug_dataset_id=f"ddm-{submitted.command.id}-training")
         recovered = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert recovered.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert recovered.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         assert recovered.command is not None
         assert recovered.command.base_job_id is None
         assert recovered.command.status == "result_unknown"
@@ -364,16 +378,16 @@ def test_late_writer_cannot_replace_bound_identity(
     )
     with DdmHttpServer() as server:
         first = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert first.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert first.outcome is TrainingDispatchOutcome.BOUND
         assert first.command is not None
         bound_id = first.command.base_job_id
         with session_factory(engine)() as session:
-            PostgresDatasetRepository(session).bind_ddm_training_base_job(
+            PostgresDatasetRepository(session).bind_training_base_job(
                 command_id=submitted.command.id, base_job_id=str(uuid4()), now=NOW
             )
             session.commit()
         with session_factory(engine)() as session:
-            reloaded = PostgresDatasetRepository(session).ddm_training_command_by_id(
+            reloaded = PostgresDatasetRepository(session).training_command_by_id(
                 submitted.command.id
             )
         assert reloaded is not None
@@ -395,7 +409,7 @@ def test_permission_revoked_never_sends(
             now=NOW,
             resolve_current_caller=lambda _actor_id: _caller(Permission.DATASET_VIEW),
         )
-        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.outcome is TrainingDispatchOutcome.FAILED
         assert result.failure_code == "PERMISSION_REVOKED"
         assert server.starts == []
 
@@ -423,7 +437,7 @@ def test_permission_revoked_during_preparation_never_sends(
             now=NOW,
             resolve_current_caller=resolve,
         )
-        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.outcome is TrainingDispatchOutcome.FAILED
         assert result.failure_code == "PERMISSION_REVOKED"
         assert server.starts == []
         # 完整准备后权限撤销：本次新建的 own root 与两个已平铺目录都必须清理。
@@ -445,7 +459,7 @@ def test_reader_parameter_mismatch_never_sends(
             engine, tmp_path, server, training_consumer_parameters={"temporal_stride": 999}
         )
         result = run(worker, submitted.command.id)
-        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.outcome is TrainingDispatchOutcome.FAILED
         assert server.starts == []
         # 确定失败后本次新建的工作副本必须清理，不能留下孤儿目录。
         assert not (tmp_path / submitted.command.payload["input_id"]).exists()
@@ -475,7 +489,7 @@ def test_partial_exposure_failure_cleans_only_own_workcopies(
 
         monkeypatch.setattr(os, "replace", flaky_replace)
         result = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.outcome is TrainingDispatchOutcome.FAILED
         assert result.failure_code == "STORAGE_UNAVAILABLE"
         assert server.starts == []
         assert len(moved) == 1
@@ -496,11 +510,11 @@ def test_recovery_refuses_mismatched_backend_target(
         server.start_error = 502
         assert (
             run(executor(engine, tmp_path, server), submitted.command.id).outcome
-            is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+            is TrainingDispatchOutcome.RESULT_UNKNOWN
         )
         mismatched = executor(engine, tmp_path, server, backend_target="http://127.0.0.1:1")
         result = run(mismatched, submitted.command.id)
-        assert result.outcome is DdmTrainingDispatchOutcome.BLOCKED
+        assert result.outcome is TrainingDispatchOutcome.BLOCKED
         assert result.failure_code == "BACKEND_TARGET_MISMATCH"
         assert len(server.starts) == 1
 
@@ -521,14 +535,14 @@ def test_bind_write_fault_preserves_unknown_without_resend(
         def explode(_repository: object, **_kwargs: object) -> None:
             raise RuntimeError("simulated bind write failure")
 
-        monkeypatch.setattr(PostgresDatasetRepository, "bind_ddm_training_base_job", explode)
+        monkeypatch.setattr(PostgresDatasetRepository, "bind_training_base_job", explode)
         first = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert first.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert first.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         assert first.failure_code == "BIND_UNVERIFIED"
         assert len(server.starts) == 1
         monkeypatch.undo()
         second = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert second.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert second.outcome is TrainingDispatchOutcome.BOUND
         assert second.command is not None
         assert second.command.base_job_id in server.jobs
         assert len(server.starts) == 1
@@ -550,7 +564,7 @@ def test_interruption_after_base_accepts_reconstructs_and_binds_without_second_s
             run(faulted, submitted.command.id)
         assert len(server.starts) == 1
         with session_factory(engine)() as session:
-            committed = PostgresDatasetRepository(session).ddm_training_command_by_id(
+            committed = PostgresDatasetRepository(session).training_command_by_id(
                 submitted.command.id
             )
         assert committed is not None
@@ -558,7 +572,7 @@ def test_interruption_after_base_accepts_reconstructs_and_binds_without_second_s
         assert committed.base_job_id is None
 
         recovered = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert recovered.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert recovered.outcome is TrainingDispatchOutcome.BOUND
         assert recovered.command is not None
         assert recovered.command.base_job_id in server.jobs
         assert len(server.starts) == 1
@@ -584,7 +598,7 @@ def test_uncertain_intent_commit_never_sends(
         assert server.starts == []
 
         with session_factory(engine)() as session:
-            committed = PostgresDatasetRepository(session).ddm_training_command_by_id(
+            committed = PostgresDatasetRepository(session).training_command_by_id(
                 submitted.command.id
             )
         assert committed is not None
@@ -592,7 +606,7 @@ def test_uncertain_intent_commit_never_sends(
         assert committed.base_job_id is None
 
         redelivery = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert redelivery.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert redelivery.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         assert server.starts == []
 
 
@@ -616,9 +630,9 @@ def test_begin_cas_loss_to_definite_failure_cleans_own_workcopies(
             calls["count"] += 1
             if calls["count"] == 2:
                 with session_factory(engine)() as session:
-                    PostgresDatasetRepository(session).record_ddm_training_failure(
+                    PostgresDatasetRepository(session).record_training_failure(
                         command_id=submitted.command.id,
-                        expected_status=DdmTrainingCommandStatus.PENDING,
+                        expected_status=TrainingCommandStatus.PENDING,
                         failure_code="SIMULATED_TERMINAL",
                         failure_detail="其它 worker 已确定失败",
                         now=NOW,
@@ -631,7 +645,7 @@ def test_begin_cas_loss_to_definite_failure_cleans_own_workcopies(
             now=NOW,
             resolve_current_caller=resolve,
         )
-        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.outcome is TrainingDispatchOutcome.FAILED
         assert result.failure_code == "SIMULATED_TERMINAL"
         assert server.starts == []
         assert not (tmp_path / submitted.command.payload["input_id"]).exists()
@@ -668,7 +682,7 @@ def test_revocation_failure_record_commit_uncertain_still_cleans_own_workcopies(
             now=NOW,
             resolve_current_caller=resolve,
         )
-        assert result.outcome is DdmTrainingDispatchOutcome.FAILED
+        assert result.outcome is TrainingDispatchOutcome.FAILED
         assert result.failure_code == "PERMISSION_REVOKED"
         assert server.starts == []
         assert not (tmp_path / submitted.command.payload["input_id"]).exists()
@@ -730,23 +744,25 @@ def _result_executor(
     *,
     results_root: Path,
     objects_root: Path,
-) -> PostgresDdmTrainingExecutor:
-    return PostgresDdmTrainingExecutor(
+) -> PostgresTrainingCommandExecutor:
+    return PostgresTrainingCommandExecutor(
         factory=session_factory(engine),
         storage_factory=lambda: LocalFileObjectStorage(objects_root),
-        generate=NvidiaDdmAnnotationGenerator().generate,
-        backend=HttpDdmTrainingBackend(base_url=server.url, timeout_seconds=2),
-        backend_target=server.url,
-        dataset_root=root,
-        training_consumer_parameters=DDM_CONSUMER_PARAMETERS,
-        validation_consumer_parameters=DDM_VALIDATION_CONSUMER_PARAMETERS,
-        result_volume=LocalDdmResultVolume(results_root=results_root, dataset_root=root),
+        adapter=DdmTrainingServiceAdapter(
+            generate=NvidiaDdmAnnotationGenerator().generate,
+            backend=HttpDdmTrainingBackend(base_url=server.url, timeout_seconds=2),
+            backend_target=server.url,
+            dataset_root=root,
+            training_consumer_parameters=DDM_CONSUMER_PARAMETERS,
+            validation_consumer_parameters=DDM_VALIDATION_CONSUMER_PARAMETERS,
+            result_volume=LocalDdmResultVolume(results_root=results_root, dataset_root=root),
+        ),
     )
 
 
-def _reload(engine: Engine, command_id: UUID) -> DdmTrainingCommand:
+def _reload(engine: Engine, command_id: UUID) -> TrainingCommand:
     with session_factory(engine)() as session:
-        command = PostgresDatasetRepository(session).ddm_training_command_by_id(command_id)
+        command = PostgresDatasetRepository(session).training_command_by_id(command_id)
     assert command is not None
     return command
 
@@ -763,7 +779,7 @@ def test_base_completed_registers_real_config_and_checkpoint_then_releases_guard
     objects_root = tmp_path / "objects"
     with DdmHttpServer() as server:
         bound = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert bound.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert bound.outcome is TrainingDispatchOutcome.BOUND
         assert bound.command is not None
         base_job_id = bound.command.base_job_id
         assert base_job_id is not None
@@ -779,9 +795,9 @@ def test_base_completed_registers_real_config_and_checkpoint_then_releases_guard
             engine, tmp_path, server, results_root=results_root, objects_root=objects_root
         )
         result = run(worker, submitted.command.id)
-        assert result.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert result.outcome is TrainingDispatchOutcome.BOUND
         stored = _reload(engine, submitted.command.id)
-        assert stored.status is DdmTrainingCommandStatus.COMPLETED
+        assert stored.status is TrainingCommandStatus.COMPLETED
         assert stored.result_status == "registered"
         assert stored.result_registered_at is not None
         assert stored.result_generation == 1
@@ -831,7 +847,7 @@ def test_completed_without_readable_checkpoint_keeps_guard_and_records_diagnosti
         )
         run(worker, submitted.command.id)
         stored = _reload(engine, submitted.command.id)
-        assert stored.status is DdmTrainingCommandStatus.BOUND
+        assert stored.status is TrainingCommandStatus.BOUND
         assert stored.result_status == "not_registered"
         assert stored.result_failure_code is not None
         assert stored.base_observation is not None
@@ -903,7 +919,7 @@ def test_late_result_writer_cannot_replace_registered_result(
         original = _reload(engine, submitted.command.id)
         assert original.result_status == "registered"
         with session_factory(engine)() as session:
-            replaced = PostgresDatasetRepository(session).register_ddm_training_result(
+            replaced = PostgresDatasetRepository(session).register_training_result(
                 command_id=submitted.command.id,
                 base_job_id=base_job_id,
                 config_object_key="ddm-results/late/config.yaml",
@@ -982,7 +998,7 @@ def test_result_requires_actual_frozen_inputs_and_safe_source(
             submitted.command.id,
         )
         observed = _reload(engine, submitted.command.id)
-        assert observed.status is DdmTrainingCommandStatus.BOUND
+        assert observed.status is TrainingCommandStatus.BOUND
         assert observed.result_status == "not_registered"
         assert observed.result_failure_code == "RESULT_UNREADABLE"
 
@@ -1031,7 +1047,7 @@ def test_job_finish_rejection_rolls_back_result_and_late_writer_preserves_winner
             )
             assert current_lease is not None
 
-        def finish_old(session: object, result: DdmTrainingJobResult) -> bool:
+        def finish_old(session: object, result: TrainingJobResult) -> bool:
             return PostgresJobRepository(cast(Session, session)).finish(
                 job_id=submitted.job.id,
                 status=JobStatus.SUCCEEDED.value,
@@ -1040,7 +1056,7 @@ def test_job_finish_rejection_rolls_back_result_and_late_writer_preserves_winner
                 expected_updated_at=old_lease.updated_at,
             )
 
-        def finish_current(session: object, result: DdmTrainingJobResult) -> bool:
+        def finish_current(session: object, result: TrainingJobResult) -> bool:
             return PostgresJobRepository(cast(Session, session)).finish(
                 job_id=submitted.job.id,
                 status=JobStatus.SUCCEEDED.value,
@@ -1057,7 +1073,7 @@ def test_job_finish_rejection_rolls_back_result_and_late_writer_preserves_winner
             commit_transaction=commit,
         )
         rejected = _reload(engine, submitted.command.id)
-        assert rejected.status is DdmTrainingCommandStatus.BOUND
+        assert rejected.status is TrainingCommandStatus.BOUND
         assert rejected.result_status == "not_registered"
         assert not list(objects_root.rglob("*.ckpt"))
 
@@ -1093,7 +1109,7 @@ def test_job_finish_rejection_rolls_back_result_and_late_writer_preserves_winner
             commit_transaction=commit,
         )
         published = _reload(engine, submitted.command.id)
-        assert published.status is DdmTrainingCommandStatus.COMPLETED
+        assert published.status is TrainingCommandStatus.COMPLETED
         assert published.result_checkpoint_object_key is not None
         assert (
             objects_root / published.result_checkpoint_object_key
@@ -1121,7 +1137,7 @@ def test_cancelled_metadata_keeps_original_job_and_inflight_guard(
         server.jobs[job_id].status = "cancelled"
         cancelled = run(executor(engine, tmp_path, server), submitted.command.id)
         assert cancelled.command is not None
-        assert cancelled.command.status is DdmTrainingCommandStatus.BOUND
+        assert cancelled.command.status is TrainingCommandStatus.BOUND
         stored = _reload(engine, submitted.command.id)
         assert stored.base_observation is not None
         assert stored.base_observation["status"] == "cancelled"
@@ -1129,7 +1145,7 @@ def test_cancelled_metadata_keeps_original_job_and_inflight_guard(
         server.jobs[job_id].status = "running"
         run(executor(engine, tmp_path, server), submitted.command.id)
         resumed = _reload(engine, submitted.command.id)
-        assert resumed.status is DdmTrainingCommandStatus.BOUND
+        assert resumed.status is TrainingCommandStatus.BOUND
         assert resumed.base_observation is not None
         assert resumed.base_observation["status"] == "running"
         assert resumed.observation_failure_code is None
@@ -1158,10 +1174,10 @@ def test_observation_failure_preserves_last_observation_and_raw_status(
         assert last_observed is not None
         server.query_error = True
         failed = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert failed.outcome is DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+        assert failed.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
         stored = _reload(engine, submitted.command.id)
         # 查询失败不清空基座原状态与最后成功观测时刻，也不表示完成。
-        assert stored.status is DdmTrainingCommandStatus.BOUND
+        assert stored.status is TrainingCommandStatus.BOUND
         assert stored.base_observation is not None
         assert stored.base_observation["status"] == "running"
         assert stored.last_observed_at == last_observed

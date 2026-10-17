@@ -356,7 +356,7 @@ class DatasetValidationRuntime(Protocol):
         ...
 
 
-class DdmTrainingJobOutcome(StrEnum):
+class TrainingJobOutcome(StrEnum):
     """DDM 训练命令在通用 job 视角下的终态。"""
 
     COMPLETED = "completed"
@@ -367,21 +367,21 @@ class DdmTrainingJobOutcome(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class DdmTrainingJobResult:
-    """DDM 执行器返回给 job owner 的窄结果事实。"""
+class TrainingJobResult:
+    """DDM/VLM 训练执行器返回给 job owner 的窄结果事实。"""
 
-    outcome: DdmTrainingJobOutcome
+    outcome: TrainingJobOutcome
     failure_code: str | None = None
 
 
-class DdmTrainingJobFinisher(Protocol):
+class TrainingJobFinisher(Protocol):
     """job owner 在 dataset 的发布事务内核对租约并写通用终态。"""
 
-    def __call__(self, session: object, result: DdmTrainingJobResult) -> bool: ...
+    def __call__(self, session: object, result: TrainingJobResult) -> bool: ...
 
 
-class DdmTrainingJobExecutor(Protocol):
-    """供 `job` worker 调用的 DDM 训练命令执行 seam。"""
+class TrainingJobExecutor(Protocol):
+    """供 `job` worker 调用的 DDM/VLM 训练命令执行 seam。"""
 
     def execute_job(
         self,
@@ -389,9 +389,9 @@ class DdmTrainingJobExecutor(Protocol):
         command_id: UUID,
         now: datetime,
         resolve_current_caller: CurrentCallerResolver,
-        finish_job: DdmTrainingJobFinisher,
+        finish_job: TrainingJobFinisher,
         commit_transaction: ArtifactTransactionCommitter,
-    ) -> DdmTrainingJobResult:
+    ) -> TrainingJobResult:
         """推进一条 DDM 训练命令；完成/失败时才返回终态，否则返回进行中。"""
         ...
 
@@ -422,9 +422,6 @@ __all__ = [
     "DdmInputConsumption",
     "DdmInputSelection",
     "DdmReader",
-    "DdmTrainingJobExecutor",
-    "DdmTrainingJobOutcome",
-    "DdmTrainingJobResult",
     "FrozenDdmInput",
     "FrozenDdmInputSet",
     "FrozenDdmMemberInput",
@@ -434,6 +431,9 @@ __all__ = [
     "ObjectStorageUnavailableError",
     "PreparedAnnotationCopy",
     "PublishedDatasetArtifact",
+    "TrainingJobExecutor",
+    "TrainingJobOutcome",
+    "TrainingJobResult",
     "UsageCheckStatus",
     "UsageCheckTarget",
     "UsageKind",

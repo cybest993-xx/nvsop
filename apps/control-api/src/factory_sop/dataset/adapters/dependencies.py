@@ -23,14 +23,23 @@ from factory_sop.dataset.adapters.ddm import (
     load_ddm_reader_parameters,
 )
 from factory_sop.dataset.adapters.ddm_execution import (
+    DdmTrainingServiceAdapter,
     HttpDdmTrainingBackend,
-    PostgresDdmTrainingExecutor,
 )
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
-from factory_sop.dataset.adapters.vlm import NvidiaVlmReader
-from factory_sop.dataset.annotation import AnnotationBackend
+from factory_sop.dataset.adapters.training_execution import PostgresTrainingCommandExecutor
+from factory_sop.dataset.adapters.vlm import (
+    LocalVlmResultVolume,
+    NvidiaVlmJsonDiscovery,
+    NvidiaVlmReader,
+)
+from factory_sop.dataset.adapters.vlm_execution import (
+    HttpVlmTrainingBackend,
+    VlmTrainingServiceAdapter,
+)
+from factory_sop.dataset.annotation import AnnotationBackend, AnnotationDataVolume
 from factory_sop.dataset.api import (
     ArtifactTransactionCommitter,
     DatasetAnnotationRuntime,
@@ -39,16 +48,16 @@ from factory_sop.dataset.api import (
     DatasetResourceLookup,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
-    DdmTrainingJobExecutor,
-    DdmTrainingJobFinisher,
-    DdmTrainingJobOutcome,
-    DdmTrainingJobResult,
+    TrainingJobExecutor,
+    TrainingJobFinisher,
+    TrainingJobOutcome,
+    TrainingJobResult,
 )
 from factory_sop.dataset.media import MediaProbe
 from factory_sop.dataset.repository import (
     AugmentationRepository,
     DatasetRepository,
-    DdmTrainingCommandRepository,
+    TrainingCommandRepository,
     UsageDatasetRepository,
 )
 from factory_sop.dataset.storage import ObjectStorage
@@ -67,7 +76,7 @@ class _DatasetResourceLookup:
 
     def __init__(
         self,
-        datasets: DdmTrainingCommandRepository,
+        datasets: TrainingCommandRepository,
         augmentations: AugmentationRepository | None = None,
     ) -> None:
         self._datasets = datasets
@@ -88,7 +97,7 @@ class _DatasetResourceLookup:
         for value in (
             self._datasets.usage_check_by_id(resource_id),
             self._datasets.artifact_by_id(resource_id),
-            self._datasets.ddm_training_command_by_id(resource_id),
+            self._datasets.training_command_by_id(resource_id),
         ):
             if value is not None and value.dataset_id == dataset_id:
                 return True
@@ -99,7 +108,7 @@ class _DatasetResourceLookup:
 
 
 def dataset_resource(
-    datasets: Annotated[DdmTrainingCommandRepository, Depends(datasets)],
+    datasets: Annotated[TrainingCommandRepository, Depends(datasets)],
 ) -> DatasetResourceLookup:
     """提供 job 查询任务资源归属所需的最小数据集契约。"""
     return _DatasetResourceLookup(datasets, cast(AugmentationRepository, datasets))
@@ -247,8 +256,11 @@ def artifact_executor(
     )
 
 
-class _UnconfiguredDdmTrainingExecutor:
-    """未配置 DDM 基座时的占位执行器：绝不静默开始训练。"""
+class _UnconfiguredTrainingExecutor:
+    """未配置对应训练基座时的占位执行器：绝不静默开始训练。"""
+
+    def __init__(self, service_label: str) -> None:
+        self._service_label = service_label
 
     def execute_job(
         self,
@@ -256,42 +268,85 @@ class _UnconfiguredDdmTrainingExecutor:
         command_id: UUID,
         now: datetime,
         resolve_current_caller: CurrentCallerResolver,
-        finish_job: DdmTrainingJobFinisher,
+        finish_job: TrainingJobFinisher,
         commit_transaction: ArtifactTransactionCommitter,
-    ) -> DdmTrainingJobResult:
-        return DdmTrainingJobResult(DdmTrainingJobOutcome.PENDING, "DDM_UNCONFIGURED")
+    ) -> TrainingJobResult:
+        return TrainingJobResult(TrainingJobOutcome.PENDING, f"{self._service_label}_UNCONFIGURED")
 
 
 def ddm_executor(
     settings: Settings,
     factory: sessionmaker[DatabaseSession],
-) -> DdmTrainingJobExecutor:
+) -> TrainingJobExecutor:
     """构造 DDM 训练命令执行器；未配置时返回不开始训练的占位实现。
 
     配置但服务不可达一律由执行器记诊断，不影响登录、模板、设备与控制面启动。
     """
     if settings.ddm_training_backend_url is None or settings.ddm_training_config_path is None:
-        return _UnconfiguredDdmTrainingExecutor()
+        return _UnconfiguredTrainingExecutor("DDM")
     config_path = Path(settings.ddm_training_config_path)
     assert settings.ddm_training_dataset_root is not None
     assert settings.ddm_training_results_root is not None
     dataset_root = Path(settings.ddm_training_dataset_root)
-    return PostgresDdmTrainingExecutor(
+    return PostgresTrainingCommandExecutor(
         factory=factory,
         storage_factory=lambda: LocalFileObjectStorage.from_settings(settings),
-        generate=NvidiaDdmAnnotationGenerator().generate,
-        backend=HttpDdmTrainingBackend(
-            base_url=settings.ddm_training_backend_url,
-            timeout_seconds=settings.ddm_training_http_timeout_seconds,
-        ),
-        backend_target=settings.ddm_training_backend_url,
-        dataset_root=dataset_root,
-        training_consumer_parameters={},
-        validation_consumer_parameters={},
-        reader_parameters=lambda: load_ddm_reader_parameters(config_path),
-        result_volume=LocalDdmResultVolume(
-            results_root=Path(settings.ddm_training_results_root),
+        adapter=DdmTrainingServiceAdapter(
+            backend=HttpDdmTrainingBackend(
+                base_url=settings.ddm_training_backend_url,
+                timeout_seconds=settings.ddm_training_http_timeout_seconds,
+            ),
+            backend_target=settings.ddm_training_backend_url,
             dataset_root=dataset_root,
+            training_consumer_parameters={},
+            validation_consumer_parameters={},
+            generate=NvidiaDdmAnnotationGenerator().generate,
+            reader_parameters=lambda: load_ddm_reader_parameters(config_path),
+            result_volume=LocalDdmResultVolume(
+                results_root=Path(settings.ddm_training_results_root),
+                dataset_root=dataset_root,
+            ),
+        ),
+    )
+
+
+def vlm_executor(
+    settings: Settings,
+    factory: sessionmaker[DatabaseSession],
+) -> TrainingJobExecutor:
+    """构造 VLM 训练命令执行器；未配置时返回不开始训练的占位实现。
+
+    VLM 微调是可选能力：未配置时命令只保留 outbox 事实，不阻止其他产品交付。
+    """
+    if settings.vlm_training_backend_url is None:
+        return _UnconfiguredTrainingExecutor("VLM")
+    assert settings.vlm_training_dataset_root is not None
+    assert settings.vlm_training_results_root is not None
+    dataset_root = Path(settings.vlm_training_dataset_root)
+
+    def annotation_volume() -> AnnotationDataVolume | None:
+        # 整段视频候选不需要标注卷；只有标注切片会用到它，且缺失时材料化会给出
+        # 可诊断的拒绝而不是把未处理的异常抛到 worker。
+        if settings.annotation_data_root is None:
+            return None
+        return LocalAnnotationDataVolume(Path(settings.annotation_data_root))
+
+    return PostgresTrainingCommandExecutor(
+        factory=factory,
+        storage_factory=lambda: LocalFileObjectStorage.from_settings(settings),
+        adapter=VlmTrainingServiceAdapter(
+            backend=HttpVlmTrainingBackend(
+                base_url=settings.vlm_training_backend_url,
+                timeout_seconds=settings.vlm_training_http_timeout_seconds,
+            ),
+            backend_target=settings.vlm_training_backend_url,
+            dataset_root=dataset_root,
+            annotation_volume=annotation_volume,
+            result_volume=LocalVlmResultVolume(
+                results_root=Path(settings.vlm_training_results_root),
+                dataset_root=dataset_root,
+            ),
+            discovery=NvidiaVlmJsonDiscovery(),
         ),
     )
 

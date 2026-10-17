@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from conftest import BootstrapCommand, csrf_header, log_in
 from httpx2 import Client
 from sqlalchemy import Engine
@@ -23,6 +26,44 @@ if str(INTEGRATION) not in sys.path:
     sys.path.insert(0, str(INTEGRATION))
 from test_augmentation_command import NvidiaAugmentationHttpServer, _input, _seed  # noqa: E402
 from test_ddm_training_command import _SOURCE_BYTES  # noqa: E402
+
+
+@pytest.fixture
+def real_video_bytes(tmp_path: Path) -> bytes:
+    """真实 H.264/MP4 合成媒体用于系统级 ffprobe 和不可丢失的对象复制。"""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None or shutil.which("ffprobe") is None:
+        pytest.fail("增强系统验收需要 ffmpeg 和 ffprobe")
+    output = tmp_path / "augmentation-synthetic.mp4"
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=32x32:r=24",
+            "-t",
+            "1",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0 or not output.is_file():
+        pytest.fail("ffmpeg 无法生成真实增强验收视频")
+    return output.read_bytes()
 
 
 def test_sys_84_authorized_augmentation_registration_and_history(

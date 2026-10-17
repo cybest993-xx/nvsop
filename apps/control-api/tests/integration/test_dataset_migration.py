@@ -12,7 +12,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
@@ -334,7 +334,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "dataset_vlm_candidate",
         "dataset_usage_check",
         "dataset_artifact",
-        "dataset_ddm_training_command",
+        "dataset_training_command",
     } <= _tables(database_at_0023)
     assert {
         "id",
@@ -451,7 +451,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
             )
         ).scalar_one()
     # #215：正常交权授予结果与既有引用保护、回收账本随 head 到位。
-    assert version == "0072"
+    assert version == "0075"
     assert {"new_grant_id", "granted_at", "granted_by"} <= _columns(
         database_at_0023, "execution_normal_handover"
     )
@@ -485,6 +485,11 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "failure_detail",
         "cancelled_by",
         "cancelled_at",
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+        "service",
         "last_observed_at",
         "observation_failure_code",
         "observation_failure_detail",
@@ -499,13 +504,13 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "result_failure_code",
         "result_failure_detail",
         "result_registered_at",
-    } <= _columns(database_at_0023, "dataset_ddm_training_command")
+    } <= _columns(database_at_0023, "dataset_training_command")
     with database_at_0023.connect() as connection:
         inflight_index = connection.execute(
             text("SELECT indexdef FROM pg_indexes WHERE tablename = :table AND indexname = :index"),
             {
-                "table": "dataset_ddm_training_command",
-                "index": "uq_dataset_ddm_training_command_backend_target_inflight",
+                "table": "dataset_training_command",
+                "index": "uq_dataset_training_command_service_backend_target_inflight",
             },
         ).scalar_one()
     assert "UNIQUE" in inflight_index
@@ -536,7 +541,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "monitor_retention_cursor",
     } & _tables(database_at_0023)
     assert "review_state_known" not in _columns(database_at_0023, "evidence_evidence")
-    assert "dataset_ddm_training_command" not in _tables(database_at_0023)
+    assert "dataset_training_command" not in _tables(database_at_0023)
     assert "evidence.evidence.view" not in _permission_codes(database_at_0023)
     assert "evidence.review.edit" not in _permission_codes(database_at_0023)
     assert "evidence_review" not in _tables(database_at_0023)
@@ -699,6 +704,124 @@ def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
         assert new["cancelled_by"] is None
         assert new["cancelled_at"] is None
         assert {key: value for key, value in new.items() if key in old} == dict(old)
+
+    # 0073 保持 DDM 历史命令并新增已派发取消事实；0074 再扩展到 VLM 服务维度。
+    command.upgrade(configuration, "0073")
+    assert "dataset_ddm_training_command" in _tables(database_at_0023)
+    assert {
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } <= _columns(database_at_0023, "dataset_ddm_training_command")
+    command.upgrade(configuration, "0074")
+    assert "dataset_ddm_training_command" not in _tables(database_at_0023)
+    assert "dataset_training_command" in _tables(database_at_0023)
+    assert {
+        "service",
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } <= _columns(database_at_0023, "dataset_training_command")
+    with database_at_0023.connect() as connection:
+        services = (
+            connection.execute(text("SELECT service FROM dataset_training_command")).scalars().all()
+        )
+        foreign_key = connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid = 'dataset_training_command'::regclass AND contype = 'f'"
+            )
+        ).scalar_one()
+        inflight_index = connection.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = :index"),
+            {"index": "uq_dataset_training_command_service_backend_target_inflight"},
+        ).scalar_one()
+    assert set(services) == {"ddm"}
+    assert "REFERENCES dataset_training_dataset(id)" in foreign_key
+    assert "UNIQUE" in inflight_index
+    assert "service" in inflight_index
+    assert "backend_target" in inflight_index
+
+    # 幂等键按数据集+服务唯一：VLM 可以复用 DDM 已用的键，重复的 VLM 键仍被拒绝。
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_command "
+                "(id, dataset_id, service, status, idempotency_key, request_digest, payload, "
+                " created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'vlm', 'pending', 'existing', :digest, "
+                " '{}'::jsonb, :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "e" * 64, "actor": actor},
+        )
+    with pytest.raises(IntegrityError), database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_command "
+                "(id, dataset_id, service, status, idempotency_key, request_digest, payload, "
+                " created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'vlm', 'pending', 'existing', :digest, "
+                " '{}'::jsonb, :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "f" * 64, "actor": actor},
+        )
+
+    # 在途保护也按服务隔离：VLM 可以在同一 backend_target 上派发，第二条 VLM 在途被拒绝。
+    with database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_command "
+                "(id, dataset_id, service, status, idempotency_key, request_digest, payload, "
+                " backend_target, created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'vlm', 'result_unknown', 'vlm-inflight-1', :digest, "
+                " '{}'::jsonb, 'target', :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "0" * 64, "actor": actor},
+        )
+    with pytest.raises(IntegrityError), database_at_0023.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO dataset_training_command "
+                "(id, dataset_id, service, status, idempotency_key, request_digest, payload, "
+                " backend_target, created_by, created_at, updated_at) "
+                "VALUES (:id, :dataset_id, 'vlm', 'result_unknown', 'vlm-inflight-2', :digest, "
+                " '{}'::jsonb, 'target', :actor, now(), now())"
+            ),
+            {"id": uuid4(), "dataset_id": dataset_id, "digest": "1" * 64, "actor": actor},
+        )
+
+    # 回到 0073 的单服务 schema 不能丢失 VLM 命令；但既有 DDM 取消事实需保持。
+    with pytest.raises(DBAPIError, match="non-DDM"):
+        command.downgrade(configuration, "0073")
+    with database_at_0023.begin() as connection:
+        connection.execute(text("DELETE FROM dataset_training_command WHERE service = 'vlm'"))
+    command.downgrade(configuration, "0073")
+    assert "dataset_training_command" not in _tables(database_at_0023)
+    assert "dataset_ddm_training_command" in _tables(database_at_0023)
+    assert "service" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    assert {
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } <= _columns(database_at_0023, "dataset_ddm_training_command")
+    # 只有再回退 0073 时才移除该版本增加的取消事实列。
+    command.downgrade(configuration, "0072")
+    assert not {
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } & _columns(database_at_0023, "dataset_ddm_training_command")
+    with database_at_0023.connect() as connection:
+        restored_index = connection.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = :index"),
+            {"index": "uq_dataset_ddm_training_command_backend_target_inflight"},
+        ).scalar_one()
+    assert "UNIQUE" in restored_index
+    assert "service" not in restored_index
     command.downgrade(configuration, "0067")
     assert "cancelled_by" not in _columns(database_at_0023, "dataset_ddm_training_command")
     assert "cancelled_at" not in _columns(database_at_0023, "dataset_ddm_training_command")

@@ -15,15 +15,16 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from pprint import pformat
-from types import ModuleType, SimpleNamespace
-from typing import Any, Dict, List
+from types import ModuleType
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 
 BASE = (
     Path(__file__).resolve().parents[3]
-    / "vendor/sop-monitoring-blueprints/microservices/sop-training-bp/microservices/data-generation-pipeline"
+    / "vendor/sop-monitoring-blueprints/microservices/sop-training-bp"
+    / "microservices/data-generation-pipeline"
 )
 
 
@@ -54,8 +55,8 @@ class NvidiaAugmentationHttpServer:
             "datetime": datetime,
             "pformat": pformat,
             "traceback": traceback,
-            "Dict": Dict,
-            "List": List,
+            "Dict": dict,
+            "List": list,
             "Any": Any,
             "Query": Query,
             "HTTPException": HTTPException,
@@ -129,7 +130,7 @@ class NvidiaAugmentationHttpServer:
             target=self._server.run, kwargs={"sockets": [self._socket]}, daemon=True
         )
 
-    async def list_data(self, *, schema: Any, condition: dict[str, Any]) -> list[Any]:
+    async def list_data(self, *, schema: object, condition: dict[str, object]) -> list[Any]:
         if schema is not self._augmentation:
             return []
         return [
@@ -138,20 +139,20 @@ class NvidiaAugmentationHttpServer:
             if all(getattr(row, key) == value for key, value in condition.items())
         ]
 
-    async def insert_data(self, **values: Any) -> None:
+    async def insert_data(self, **values: object) -> None:
         row = self._augmentation(**values)
         self.rows[row.id] = row
 
-    async def update_data(self, *, id: str, **values: Any) -> None:
+    async def update_data(self, *, id: str, **values: object) -> None:  # noqa: A002 -- vendor API keyword
         for key, value in values.items():
             setattr(self.rows[id], key, value)
 
-    async def get_data(self, *, schema: Any, id: str) -> Any:
+    async def get_data(self, *, schema: object, id: str) -> object | None:  # noqa: A002 -- vendor API keyword
         return self.rows.get(id)
 
-    async def process_all_actions(self, *args: Any, **kwargs: Any) -> None:
+    async def process_all_actions(self, *args: object, **kwargs: object) -> None:
         # 明确的外部计算 seam；不生成假产物，也不将 GPU 计算冒充已执行。
-        self.processed.append(args[4])
+        self.processed.append(str(args[4]))
 
     def __enter__(self) -> NvidiaAugmentationHttpServer:
         self._thread.start()

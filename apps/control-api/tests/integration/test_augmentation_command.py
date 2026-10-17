@@ -35,7 +35,8 @@ _spec = importlib.util.spec_from_file_location(
     "augmentation_http_fixture",
     Path(__file__).resolve().parents[4] / "tests/contract/base/augmentation_http_fixture.py",
 )
-assert _spec is not None and _spec.loader is not None
+assert _spec is not None
+assert _spec.loader is not None
 _fixture = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_fixture)
 NvidiaAugmentationHttpServer: Any = _fixture.NvidiaAugmentationHttpServer
@@ -328,18 +329,20 @@ def test_only_undispatched_cancel_and_failure_never_reopen_or_replace_history(
         assert failed.result_status == "not_registered"
         assert _request(engine, dataset_id, execution_id, "eventually-failed") == failed
         assert _run(engine, tmp_path, server, failed) == failed
-        with pytest.raises(DatasetRefusedError) as conflict:
-            with session_factory(engine).begin() as session:
-                request_augmentation(
-                    dataset_id=dataset_id,
-                    execution_id=execution_id,
-                    frame_drop_iterations=2,
-                    idempotency_key="eventually-failed",
-                    caller=_caller(Permission.DATASET_EDIT),
-                    now=datetime.now(UTC),
-                    datasets=PostgresDatasetRepository(session),
-                    jobs=PostgresJobRepository(session),
-                )
+        with (
+            pytest.raises(DatasetRefusedError) as conflict,
+            session_factory(engine).begin() as session,
+        ):
+            request_augmentation(
+                dataset_id=dataset_id,
+                execution_id=execution_id,
+                frame_drop_iterations=2,
+                idempotency_key="eventually-failed",
+                caller=_caller(Permission.DATASET_EDIT),
+                now=datetime.now(UTC),
+                datasets=PostgresDatasetRepository(session),
+                jobs=PostgresJobRepository(session),
+            )
         assert conflict.value.code == DatasetRefusalCode.IDEMPOTENCY_CONFLICT
         next_command = _request(engine, dataset_id, execution_id, "after-proven-terminal")
         server.status = "running"

@@ -6,6 +6,7 @@ import hashlib
 import math
 import re
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -242,11 +243,9 @@ class PostgresAugmentationExecutor:
             if registration
             else replace(command, failure_code=code)
         )
-        try:
+        # 身份冲突不允许改绑；原先的持久在途占用继续保留。
+        with suppress(IntegrityError):
             self._save_fact(command, value)
-        except IntegrityError:
-            # 身份冲突不允许改绑；原先的持久在途占用继续保留。
-            pass
         _logger.warning(
             "dataset.augmentation.pending_verification",
             command_id=str(command.id),

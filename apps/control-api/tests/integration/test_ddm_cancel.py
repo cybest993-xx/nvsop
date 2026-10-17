@@ -1,4 +1,4 @@
-"""未派发 DDM 取消：真实 PostgreSQL、既有执行器与基座 HTTP seam。"""
+"""DDM 未派发取消与已派发停止核实：真实 PostgreSQL、进程事实与基座 HTTP seam。"""
 
 from __future__ import annotations
 
@@ -8,35 +8,36 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
 from _integration_support import RedisServer, settings_for
 from redis import Redis
 from sqlalchemy import Engine
-from test_ddm_dispatch import DdmHttpServer, executor, run
+from sqlalchemy.orm import Session
+from test_ddm_dispatch import DdmHttpServer, _reload, executor, run
 from test_ddm_dispatch import selections as selections
 from test_ddm_training_command import NOW, _caller, _submit
 
 from factory_sop.auth.api import AuthorizationRefusedError, Caller, Permission
 from factory_sop.auth.model import User, UserStatus
 from factory_sop.dataset.adapters.ddm import NvidiaDdmAnnotationGenerator
-from factory_sop.dataset.adapters.ddm_execution import (
-    DdmTrainingDispatchOutcome,
-    HttpDdmTrainingBackend,
-)
+from factory_sop.dataset.adapters.ddm_execution import HttpDdmTrainingBackend
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
+from factory_sop.dataset.adapters.training_execution import TrainingDispatchOutcome
+from factory_sop.dataset.api import TrainingJobOutcome, TrainingJobResult
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
-from factory_sop.dataset.model import DdmTrainingCommand, DdmTrainingCommandStatus
-from factory_sop.dataset.usecases.ddm_command import (
-    cancel_ddm_training_command,
-    read_ddm_training_command,
+from factory_sop.dataset.model import TrainingCommand, TrainingCommandStatus, TrainingService
+from factory_sop.dataset.usecases.training_command import (
+    cancel_training_command,
+    read_training_command,
 )
 from factory_sop.dataset.usecases.usage import DdmInputSelection
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
 from factory_sop.job.adapters.repository import PostgresJobRepository
 from factory_sop.job.adapters.worker import dispatch_ddm_training_job, dispatch_pending_jobs
-from factory_sop.job.api import JobStatus
+from factory_sop.job.api import JobStatus, JobType
 from factory_sop.persistence import session_factory
 
 
@@ -51,7 +52,8 @@ def test_cancel_pending_is_durable_idempotent_and_never_starts(
     actor = _caller(Permission.DATASET_EDIT)
     cancelled_at = submitted.command.created_at + timedelta(seconds=1)
     with session_factory(engine).begin() as session:
-        cancelled = cancel_ddm_training_command(
+        cancelled = cancel_training_command(
+            service=TrainingService.DDM,
             dataset_id=submitted.command.dataset_id,
             command_id=submitted.command.id,
             caller=actor,
@@ -69,7 +71,8 @@ def test_cancel_pending_is_durable_idempotent_and_never_starts(
     with session_factory(engine).begin() as session:
         datasets = PostgresDatasetRepository(session)
         assert (
-            read_ddm_training_command(
+            read_training_command(
+                service=TrainingService.DDM,
                 dataset_id=cancelled.dataset_id,
                 command_id=cancelled.id,
                 caller=_caller(Permission.DATASET_VIEW),
@@ -78,7 +81,8 @@ def test_cancel_pending_is_durable_idempotent_and_never_starts(
             == cancelled
         )
         assert (
-            cancel_ddm_training_command(
+            cancel_training_command(
+                service=TrainingService.DDM,
                 dataset_id=cancelled.dataset_id,
                 command_id=cancelled.id,
                 caller=actor,
@@ -116,7 +120,8 @@ def test_cancelled_outbox_redelivery_finishes_job_without_start(
     )
     factory = session_factory(engine)
     with factory.begin() as session:
-        cancelled = cancel_ddm_training_command(
+        cancelled = cancel_training_command(
+            service=TrainingService.DDM,
             dataset_id=submitted.command.dataset_id,
             command_id=submitted.command.id,
             caller=_caller(Permission.DATASET_EDIT),
@@ -136,7 +141,9 @@ def test_cancelled_outbox_redelivery_finishes_job_without_start(
             "settings": settings,
             "session_factory": factory,
             "dispatcher": ArqJobDispatcher.from_settings(settings, session_factory=factory),
-            "ddm_executor": executor(engine, tmp_path, server),
+            "training_executors": {
+                JobType.DATASET_DDM_TRAINING: executor(engine, tmp_path, server),
+            },
             "current_caller_resolver": lambda _: _caller(Permission.DATASET_EDIT),
             "blocking_job_slots": asyncio.Semaphore(1),
         }
@@ -150,15 +157,18 @@ def test_cancelled_outbox_redelivery_finishes_job_without_start(
             assert finished is not None
             assert finished.status == JobStatus.SUPERSEDED
             assert all(
-                job.id != finished.id for job in jobs.pending(limit=100, include_ddm_training=True)
+                job.id != finished.id
+                for job in jobs.pending(
+                    limit=100,
+                    configured_training_types=frozenset({JobType.DATASET_DDM_TRAINING}),
+                )
             )
         asyncio.run(dispatch_pending_jobs(ctx))
         asyncio.run(dispatch_ddm_training_job(ctx, str(submitted.job.id)))
         assert server.starts == []
         with factory() as session:
             assert (
-                PostgresDatasetRepository(session).ddm_training_command_by_id(cancelled.id)
-                == cancelled
+                PostgresDatasetRepository(session).training_command_by_id(cancelled.id) == cancelled
             )
     replay = _submit(
         engine, idempotency_key="cancel-outbox", training=selections[0], validation=selections[1]
@@ -222,7 +232,8 @@ def test_cancel_during_preparation_cancels_late_worker_and_cleans_own_workcopies
             try:
                 assert entered.wait(timeout=30)
                 with session_factory(engine).begin() as session:
-                    cancelled = cancel_ddm_training_command(
+                    cancelled = cancel_training_command(
+                        service=TrainingService.DDM,
                         dataset_id=submitted.command.dataset_id,
                         command_id=submitted.command.id,
                         caller=_caller(Permission.DATASET_EDIT),
@@ -232,7 +243,7 @@ def test_cancel_during_preparation_cancels_late_worker_and_cleans_own_workcopies
             finally:
                 release.set()
             result = future.result(timeout=30)
-        assert result.outcome is DdmTrainingDispatchOutcome.CANCELLED
+        assert result.outcome is TrainingDispatchOutcome.CANCELLED
         assert result.command == cancelled
         assert server.starts == []
         assert not (tmp_path / submitted.command.payload["input_id"]).exists()
@@ -270,7 +281,8 @@ def test_late_preparation_failure_does_not_overwrite_cancel(
             try:
                 assert entered.wait(timeout=30)
                 with session_factory(engine).begin() as session:
-                    cancelled = cancel_ddm_training_command(
+                    cancelled = cancel_training_command(
+                        service=TrainingService.DDM,
                         dataset_id=submitted.command.dataset_id,
                         command_id=submitted.command.id,
                         caller=_caller(Permission.DATASET_EDIT),
@@ -280,15 +292,15 @@ def test_late_preparation_failure_does_not_overwrite_cancel(
             finally:
                 release.set()
             result = future.result(timeout=30)
-        assert result.outcome is DdmTrainingDispatchOutcome.CANCELLED
+        assert result.outcome is TrainingDispatchOutcome.CANCELLED
         assert server.starts == []
         assert not (tmp_path / submitted.command.payload["input_id"]).exists()
         with session_factory(engine)() as session:
-            persisted = PostgresDatasetRepository(session).ddm_training_command_by_id(
+            persisted = PostgresDatasetRepository(session).training_command_by_id(
                 submitted.command.id
             )
         assert persisted is not None
-        assert persisted.status is DdmTrainingCommandStatus.CANCELLED
+        assert persisted.status is TrainingCommandStatus.CANCELLED
         assert persisted.failure_code is None
         assert persisted.cancelled_at == cancelled.cancelled_at
 
@@ -329,7 +341,8 @@ def test_late_permission_revocation_does_not_overwrite_cancel(
             try:
                 assert entered.wait(timeout=30)
                 with session_factory(engine).begin() as session:
-                    cancelled = cancel_ddm_training_command(
+                    cancelled = cancel_training_command(
+                        service=TrainingService.DDM,
                         dataset_id=submitted.command.dataset_id,
                         command_id=submitted.command.id,
                         caller=_caller(Permission.DATASET_EDIT),
@@ -339,29 +352,29 @@ def test_late_permission_revocation_does_not_overwrite_cancel(
             finally:
                 release.set()
             result = future.result(timeout=30)
-        assert result.outcome is DdmTrainingDispatchOutcome.CANCELLED
+        assert result.outcome is TrainingDispatchOutcome.CANCELLED
         assert server.starts == []
         assert not (tmp_path / submitted.command.payload["input_id"]).exists()
         assert not (tmp_path / f"ddm-{submitted.command.id}-training").exists()
         assert not (tmp_path / f"ddm-{submitted.command.id}-validation").exists()
         with session_factory(engine)() as session:
-            persisted = PostgresDatasetRepository(session).ddm_training_command_by_id(
+            persisted = PostgresDatasetRepository(session).training_command_by_id(
                 submitted.command.id
             )
         assert persisted is not None
-        assert persisted.status is DdmTrainingCommandStatus.CANCELLED
+        assert persisted.status is TrainingCommandStatus.CANCELLED
         assert persisted.failure_code is None
         assert persisted.cancelled_at == cancelled.cancelled_at
 
 
 @pytest.mark.parametrize("start_error", [None, 502])
-def test_cancel_refused_after_intent_committed_and_inflight_guard_kept(
+def test_cancel_after_intent_records_request_and_keeps_inflight_guard(
     engine: Engine,
     tmp_path: Path,
     selections: tuple[DdmInputSelection, DdmInputSelection],
     start_error: int | None,
 ) -> None:
-    """意图提交后取消被拒；UNKNOWN 丢响应与 BOUND 都保留首次事实与在途约束。"""
+    """意图提交后取消只记录请求；UNKNOWN 丢响应与 BOUND 都保留首次事实与在途约束。"""
     key = f"cancel-intent-{start_error}"
     submitted = _submit(
         engine, idempotency_key=key, training=selections[0], validation=selections[1]
@@ -386,50 +399,55 @@ def test_cancel_refused_after_intent_committed_and_inflight_guard_kept(
             try:
                 assert entered.wait(timeout=30)
                 with session_factory(engine)() as session:
-                    committed = PostgresDatasetRepository(session).ddm_training_command_by_id(
+                    committed = PostgresDatasetRepository(session).training_command_by_id(
                         submitted.command.id
                     )
                 assert committed is not None
-                assert committed.status is DdmTrainingCommandStatus.RESULT_UNKNOWN
-                with (
-                    session_factory(engine)() as session,
-                    pytest.raises(DatasetRefusedError) as refused,
-                ):
-                    cancel_ddm_training_command(
+                assert committed.status is TrainingCommandStatus.RESULT_UNKNOWN
+                with session_factory(engine).begin() as session:
+                    requested = cancel_training_command(
+                        service=TrainingService.DDM,
                         dataset_id=submitted.command.dataset_id,
                         command_id=submitted.command.id,
                         caller=_caller(Permission.DATASET_EDIT),
                         now=NOW,
                         datasets=PostgresDatasetRepository(session),
                     )
-                assert refused.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+                # 派发意图已提交：只记录取消请求，不伪称停止，也不改变在途状态。
+                assert requested.status is TrainingCommandStatus.RESULT_UNKNOWN
+                assert requested.cancel_requested_at == NOW
+                assert requested.cancelled_by is None
             finally:
                 release.set()
             result = future.result(timeout=60)
         expected = (
-            DdmTrainingDispatchOutcome.BOUND
+            TrainingDispatchOutcome.BOUND
             if start_error is None
-            else DdmTrainingDispatchOutcome.RESULT_UNKNOWN
+            else TrainingDispatchOutcome.RESULT_UNKNOWN
         )
         assert result.outcome is expected
         assert len(server.starts) == 1
-        # 首次事实保持：取消从未写入，冻结负载与在途保护不变。
+        # 首次事实保持：冻结负载与在途保护不变，取消请求是唯一新增事实。
         with session_factory(engine)() as session:
-            persisted = PostgresDatasetRepository(session).ddm_training_command_by_id(
+            persisted = PostgresDatasetRepository(session).training_command_by_id(
                 submitted.command.id
             )
         assert persisted is not None
         assert persisted.cancelled_by is None
+        assert persisted.cancel_requested_at == NOW
         assert persisted.payload == submitted.command.payload
-        with session_factory(engine)() as session, pytest.raises(DatasetRefusedError) as again:
-            cancel_ddm_training_command(
+        # 重复取消请求幂等：保留首次请求者与时刻。
+        with session_factory(engine)() as session:
+            repeated = cancel_training_command(
+                service=TrainingService.DDM,
                 dataset_id=persisted.dataset_id,
                 command_id=persisted.id,
-                caller=_caller(Permission.DATASET_EDIT),
-                now=NOW,
+                caller=_edit_caller(uuid4()),
+                now=NOW + timedelta(seconds=9),
                 datasets=PostgresDatasetRepository(session),
             )
-        assert again.value.code is DatasetRefusalCode.USAGE_STATE_CONFLICT
+        assert repeated.cancel_requested_by == requested.cancel_requested_by
+        assert repeated.cancel_requested_at == NOW
         second = _submit(
             engine,
             idempotency_key=f"{key}-second",
@@ -437,7 +455,7 @@ def test_cancel_refused_after_intent_committed_and_inflight_guard_kept(
             validation=selections[1],
         )
         blocked = run(executor(engine, tmp_path, server), second.command.id)
-        assert blocked.outcome is DdmTrainingDispatchOutcome.BLOCKED
+        assert blocked.outcome is TrainingDispatchOutcome.BLOCKED
         assert blocked.failure_code == "DISPATCH_IN_FLIGHT"
         assert len(server.starts) == 1
 
@@ -465,7 +483,8 @@ def test_cancel_requires_edit_permission(
         validation=selections[1],
     )
     with session_factory(engine)() as session, pytest.raises(AuthorizationRefusedError):
-        cancel_ddm_training_command(
+        cancel_training_command(
+            service=TrainingService.DDM,
             dataset_id=submitted.command.dataset_id,
             command_id=submitted.command.id,
             caller=_caller(*permissions),
@@ -473,11 +492,9 @@ def test_cancel_requires_edit_permission(
             datasets=PostgresDatasetRepository(session),
         )
     with session_factory(engine)() as session:
-        persisted = PostgresDatasetRepository(session).ddm_training_command_by_id(
-            submitted.command.id
-        )
+        persisted = PostgresDatasetRepository(session).training_command_by_id(submitted.command.id)
     assert persisted is not None
-    assert persisted.status is DdmTrainingCommandStatus.PENDING
+    assert persisted.status is TrainingCommandStatus.PENDING
     assert persisted.cancelled_by is None
 
 
@@ -491,7 +508,8 @@ def test_query_requires_view_and_not_edit_or_import(
     )
     with session_factory(engine)() as session:
         assert (
-            read_ddm_training_command(
+            read_training_command(
+                service=TrainingService.DDM,
                 dataset_id=submitted.command.dataset_id,
                 command_id=submitted.command.id,
                 caller=_caller(Permission.DATASET_VIEW),
@@ -505,7 +523,8 @@ def test_query_requires_view_and_not_edit_or_import(
         _caller(Permission.DATASET_IMPORT),
     ):
         with session_factory(engine)() as session, pytest.raises(AuthorizationRefusedError):
-            read_ddm_training_command(
+            read_training_command(
+                service=TrainingService.DDM,
                 dataset_id=submitted.command.dataset_id,
                 command_id=submitted.command.id,
                 caller=caller,
@@ -523,7 +542,8 @@ def test_cancel_refuses_wrong_dataset_and_missing_command(
     )
     actor = _caller(Permission.DATASET_EDIT)
     with session_factory(engine)() as session, pytest.raises(DatasetRefusedError) as wrong:
-        cancel_ddm_training_command(
+        cancel_training_command(
+            service=TrainingService.DDM,
             dataset_id=uuid4(),
             command_id=submitted.command.id,
             caller=actor,
@@ -532,7 +552,8 @@ def test_cancel_refuses_wrong_dataset_and_missing_command(
         )
     assert wrong.value.code is DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND
     with session_factory(engine)() as session, pytest.raises(DatasetRefusedError) as missing:
-        cancel_ddm_training_command(
+        cancel_training_command(
+            service=TrainingService.DDM,
             dataset_id=submitted.command.dataset_id,
             command_id=uuid4(),
             caller=actor,
@@ -541,18 +562,17 @@ def test_cancel_refuses_wrong_dataset_and_missing_command(
         )
     assert missing.value.code is DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND
     with session_factory(engine)() as session, pytest.raises(DatasetRefusedError):
-        read_ddm_training_command(
+        read_training_command(
+            service=TrainingService.DDM,
             dataset_id=uuid4(),
             command_id=submitted.command.id,
             caller=_caller(Permission.DATASET_VIEW),
             datasets=PostgresDatasetRepository(session),
         )
     with session_factory(engine)() as session:
-        persisted = PostgresDatasetRepository(session).ddm_training_command_by_id(
-            submitted.command.id
-        )
+        persisted = PostgresDatasetRepository(session).training_command_by_id(submitted.command.id)
     assert persisted is not None
-    assert persisted.status is DdmTrainingCommandStatus.PENDING
+    assert persisted.status is TrainingCommandStatus.PENDING
 
 
 def test_rolled_back_cancel_keeps_command_pending_and_startable(
@@ -565,7 +585,8 @@ def test_rolled_back_cancel_keeps_command_pending_and_startable(
         engine, idempotency_key="cancel-rollback", training=selections[0], validation=selections[1]
     )
     with session_factory(engine)() as session:
-        cancel_ddm_training_command(
+        cancel_training_command(
+            service=TrainingService.DDM,
             dataset_id=submitted.command.dataset_id,
             command_id=submitted.command.id,
             caller=_caller(Permission.DATASET_EDIT),
@@ -574,16 +595,14 @@ def test_rolled_back_cancel_keeps_command_pending_and_startable(
         )
         session.rollback()
     with session_factory(engine)() as session:
-        persisted = PostgresDatasetRepository(session).ddm_training_command_by_id(
-            submitted.command.id
-        )
+        persisted = PostgresDatasetRepository(session).training_command_by_id(submitted.command.id)
     assert persisted is not None
-    assert persisted.status is DdmTrainingCommandStatus.PENDING
+    assert persisted.status is TrainingCommandStatus.PENDING
     assert persisted.cancelled_by is None
     assert persisted.cancelled_at is None
     with DdmHttpServer() as server:
         result = run(executor(engine, tmp_path, server), submitted.command.id)
-        assert result.outcome is DdmTrainingDispatchOutcome.BOUND
+        assert result.outcome is TrainingDispatchOutcome.BOUND
         assert len(server.starts) == 1
 
 
@@ -603,13 +622,14 @@ def test_concurrent_duplicate_cancel_keeps_first_actor_and_time(
     first_now = NOW + timedelta(seconds=1)
     second_now = NOW + timedelta(seconds=2)
     barrier = threading.Barrier(2)
-    results: list[DdmTrainingCommand] = []
+    results: list[TrainingCommand] = []
 
     def cancel(caller: Caller, now: datetime) -> None:
         barrier.wait(timeout=30)
         with session_factory(engine).begin() as session:
             results.append(
-                cancel_ddm_training_command(
+                cancel_training_command(
+                    service=TrainingService.DDM,
                     dataset_id=submitted.command.dataset_id,
                     command_id=submitted.command.id,
                     caller=caller,
@@ -627,15 +647,367 @@ def test_concurrent_duplicate_cancel_keeps_first_actor_and_time(
             future.result(timeout=30)
     assert len(results) == 2
     winner = results[0]
-    assert winner.status is DdmTrainingCommandStatus.CANCELLED
+    assert winner.status is TrainingCommandStatus.CANCELLED
     assert {result.cancelled_by for result in results} == {winner.cancelled_by}
     assert {result.cancelled_at for result in results} == {winner.cancelled_at}
     assert winner.cancelled_by in {first_actor.user.id, second_actor.user.id}
     assert winner.cancelled_at in {first_now, second_now}
     with session_factory(engine)() as session:
-        persisted = PostgresDatasetRepository(session).ddm_training_command_by_id(
-            submitted.command.id
-        )
+        persisted = PostgresDatasetRepository(session).training_command_by_id(submitted.command.id)
     assert persisted is not None
     assert persisted.cancelled_by == winner.cancelled_by
     assert persisted.cancelled_at == winner.cancelled_at
+
+
+def _request_dispatched_cancel(
+    engine: Engine, command: TrainingCommand, *, actor: Caller | None = None
+) -> TrainingCommand:
+    """按已登录编辑者请求已派发取消；返回事务提交后的命令事实。"""
+    with session_factory(engine).begin() as session:
+        return cancel_training_command(
+            service=TrainingService.DDM,
+            dataset_id=command.dataset_id,
+            command_id=command.id,
+            caller=actor or _caller(Permission.DATASET_EDIT),
+            now=NOW + timedelta(seconds=1),
+            datasets=PostgresDatasetRepository(session),
+        )
+
+
+def test_dispatched_cancel_confirms_stop_and_releases_guard(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """取消前有真实进程、取消后进程消失且基座报 cancelled，才进入终态并释放在途保护。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-confirmed",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.jobs[job_id].status = "running"
+        server.jobs[job_id].process_pid = 4242
+        server.cache_job(job_id, process_pid=4242)
+        actor = _caller(Permission.DATASET_EDIT)
+        requested = _request_dispatched_cancel(engine, submitted.command, actor=actor)
+        assert requested.status is TrainingCommandStatus.BOUND
+        assert requested.cancel_requested_by == actor.user.id
+        assert requested.cancelled_by is None
+        result = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert result.outcome is TrainingDispatchOutcome.CANCELLED
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is TrainingCommandStatus.CANCELLED
+        assert stored.cancelled_by == actor.user.id
+        assert stored.cancelled_at is not None
+        assert stored.cancel_response is not None
+        assert stored.cancel_response["outcome"] == "responded"
+        assert "has been cancelled successfully" in str(stored.cancel_response["message"])
+        assert stored.cancel_detail is None
+        assert server.terminated == [4242]
+        assert len(server.starts) == 1
+        # 已核实停止才释放在途保护：同一基座目标可以再受理并派发新命令。
+        second = _submit(
+            engine,
+            idempotency_key="cancel-bound-confirmed-second",
+            training=selections[0],
+            validation=selections[1],
+        )
+        released = run(executor(engine, tmp_path, server), second.command.id)
+        assert released.outcome is TrainingDispatchOutcome.BOUND
+        assert len(server.starts) == 2
+
+
+def test_dispatched_cancel_lost_job_fence_does_not_publish_cancellation(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """已核实停止但通用 job 围栏提交失败：不发布取消终态、不伪称已释放，保留在途保护。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-fence-lost",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.jobs[job_id].status = "running"
+        server.jobs[job_id].process_pid = 707
+        server.cache_job(job_id, process_pid=707)
+        actor = _caller(Permission.DATASET_EDIT)
+        _request_dispatched_cancel(engine, submitted.command, actor=actor)
+
+        def finish_lost_fence(session: object, result: TrainingJobResult) -> bool:
+            del session, result
+            return False
+
+        def commit_transaction(session: object) -> bool:
+            cast(Session, session).commit()
+            return True
+
+        # 基座进程已终止且报告 cancelled，但本次提交拿不到通用 job 围栏。
+        lost = executor(engine, tmp_path, server).execute_job(
+            command_id=submitted.command.id,
+            now=NOW + timedelta(seconds=2),
+            resolve_current_caller=lambda _: _caller(Permission.DATASET_EDIT),
+            finish_job=finish_lost_fence,
+            commit_transaction=commit_transaction,
+        )
+        assert lost.outcome is TrainingJobOutcome.LEASE_LOST
+        stored = _reload(engine, submitted.command.id)
+        # 未提交的取消终态不得外泄：命令仍在途、取消人未写、原响应未发布。
+        assert stored.status is TrainingCommandStatus.BOUND
+        assert stored.cancelled_by is None
+        assert stored.cancelled_at is None
+        assert stored.cancel_requested_by == actor.user.id
+        assert stored.cancel_requested_at is not None
+        assert stored.cancel_response is None
+        # 未发布的停止结论仍要给操作者可复核的未确认诊断。
+        assert stored.observation_failure_code == "BASE_CANCELLATION_UNVERIFIED"
+        assert stored.observation_failure_detail is not None
+        # 未确认取消不释放派发约束，也不重发 start。
+        second = _submit(
+            engine,
+            idempotency_key="cancel-bound-fence-lost-second",
+            training=selections[0],
+            validation=selections[1],
+        )
+        blocked = run(executor(engine, tmp_path, server), second.command.id)
+        assert blocked.outcome is TrainingDispatchOutcome.BLOCKED
+        assert blocked.failure_code == "DISPATCH_IN_FLIGHT"
+        assert len(server.starts) == 1
+
+
+def test_dispatched_cancel_entry_failure_stays_unconfirmed_and_recovers(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """取消入口本身失败（HTTP 500）不构成停止证据：保持 bound、保留失败类别，随后仍可核实终结。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-entry-failed",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.jobs[job_id].status = "running"
+        server.jobs[job_id].process_pid = 606
+        server.cache_job(job_id, process_pid=606)
+        _request_dispatched_cancel(engine, submitted.command)
+        # 基座真实取消入口在终止失败时返回 HTTP 500：进程可能仍在运行，不能据此宣告停止。
+        server.terminate_succeeds = False
+        failed = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert failed.outcome is TrainingDispatchOutcome.BOUND
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is TrainingCommandStatus.BOUND
+        assert stored.cancelled_by is None
+        assert stored.cancel_response == {"outcome": "cancel_failed", "http_status": 500}
+        assert stored.cancel_detail is not None
+        assert "未成功返回" in stored.cancel_detail
+        # 取消入口确实被调用并尝试终止，但基座报告终止失败。
+        assert server.terminated == [606]
+        assert len(server.starts) == 1
+        # 未确认取消不阻止后续核实：下一次投递终止真实进程后进入取消终态。
+        server.terminate_succeeds = True
+        recovered = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert recovered.outcome is TrainingDispatchOutcome.CANCELLED
+        assert _reload(engine, submitted.command.id).status is TrainingCommandStatus.CANCELLED
+        assert server.terminated == [606, 606]
+        assert len(server.starts) == 1
+
+
+def test_dispatched_cancel_without_pid_stays_unconfirmed(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """无 PID 时基座成功文案不证明停止：保持 bound 与在途保护，保留原响应。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-nopid",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.cache_job(job_id, process_pid=None)
+        requested = _request_dispatched_cancel(engine, submitted.command)
+        assert requested.status is TrainingCommandStatus.BOUND
+        result = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert result.outcome is TrainingDispatchOutcome.BOUND
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is TrainingCommandStatus.BOUND
+        assert stored.cancel_requested_at is not None
+        assert stored.cancelled_by is None
+        assert stored.cancel_response is not None
+        assert "was queued and has been cancelled successfully" in str(
+            stored.cancel_response["message"]
+        )
+        assert stored.cancel_detail is not None
+        assert "未报告在运行的进程" in stored.cancel_detail
+        assert server.terminated == []
+        # 未确认取消不释放派发约束。
+        second = _submit(
+            engine,
+            idempotency_key="cancel-bound-nopid-second",
+            training=selections[0],
+            validation=selections[1],
+        )
+        blocked = run(executor(engine, tmp_path, server), second.command.id)
+        assert blocked.outcome is TrainingDispatchOutcome.BLOCKED
+        assert blocked.failure_code == "DISPATCH_IN_FLIGHT"
+
+
+def test_dispatched_cancel_keeps_unconfirmed_when_process_survives(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """服务重启后取消只改元数据：进程仍在运行必须显示未确认，不被 cancelled 掩盖。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-restart",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.jobs[job_id].status = "running"
+        server.jobs[job_id].process_pid = 777
+        # 缓存为空（服务重启）：取消走数据库分支，只写 cancelled 元数据，不清仍在运行的进程。
+        assert job_id not in server.cache
+        _request_dispatched_cancel(engine, submitted.command)
+        result = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert result.outcome is TrainingDispatchOutcome.BOUND
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is TrainingCommandStatus.BOUND
+        assert stored.base_job_id == job_id
+        assert stored.cancel_response is not None
+        assert "marked as cancelled" in str(stored.cancel_response["message"])
+        assert stored.cancel_detail is not None
+        assert "仍报告在运行的进程" in stored.cancel_detail
+        # 基座原状态与后续观测保留：元数据已 cancelled，但命令仍绑定原任务。
+        assert stored.base_observation is not None
+        assert stored.base_observation["status"] == "cancelled"
+        assert server.terminated == []
+
+
+def test_dispatched_cancel_confirms_after_late_start(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """无 PID 取消后基座随后启动的进程仍会被后续轮询终止并核实，不被 cancelled 元数据掩盖。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-late-start",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.cache_job(job_id, process_pid=None)
+        _request_dispatched_cancel(engine, submitted.command)
+        first = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert first.outcome is TrainingDispatchOutcome.BOUND
+        # 基座后台任务随后真的启动了进程：后续轮询必须重新核实并终止它。
+        server.jobs[job_id].status = "running"
+        server.jobs[job_id].process_pid = 555
+        server.cache_job(job_id, process_pid=555)
+        second = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert second.outcome is TrainingDispatchOutcome.CANCELLED
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is TrainingCommandStatus.CANCELLED
+        assert server.terminated == [555]
+        assert len(server.starts) == 1
+
+
+def test_dispatched_cancel_unreachable_keeps_unconfirmed_and_recovers(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """取消期基座不可达只记录未核实；恢复后仍能重新调用原取消入口并核实停止。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-unreachable",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        assert bound.command.base_job_id is not None
+        job_id = bound.command.base_job_id
+        server.jobs[job_id].status = "running"
+        server.jobs[job_id].process_pid = 909
+        # 缓存为空：状态查询也会落到不可达的基座，与取消查询同时失败。
+        assert job_id not in server.cache
+        _request_dispatched_cancel(engine, submitted.command)
+        server.query_error = True
+        unreachable = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert unreachable.outcome is TrainingDispatchOutcome.RESULT_UNKNOWN
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is TrainingCommandStatus.BOUND
+        assert stored.cancel_detail is not None
+        assert "无法" in stored.cancel_detail
+        server.query_error = False
+        server.cache_job(job_id, process_pid=909)
+        recovered = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert recovered.outcome is TrainingDispatchOutcome.CANCELLED
+        assert _reload(engine, submitted.command.id).status is TrainingCommandStatus.CANCELLED
+        assert server.terminated == [909]
+
+
+def test_dispatched_cancel_requires_edit_permission(
+    engine: Engine,
+    tmp_path: Path,
+    selections: tuple[DdmInputSelection, DdmInputSelection],
+) -> None:
+    """查看/导入权限不能请求已派发取消；授权先于任何读取，不写入请求事实。"""
+    submitted = _submit(
+        engine,
+        idempotency_key="cancel-bound-perm",
+        training=selections[0],
+        validation=selections[1],
+    )
+    with DdmHttpServer() as server:
+        bound = run(executor(engine, tmp_path, server), submitted.command.id)
+        assert bound.command is not None
+        for caller in (_caller(Permission.DATASET_VIEW), _caller(Permission.DATASET_IMPORT)):
+            with session_factory(engine)() as session, pytest.raises(AuthorizationRefusedError):
+                cancel_training_command(
+                    service=TrainingService.DDM,
+                    dataset_id=submitted.command.dataset_id,
+                    command_id=submitted.command.id,
+                    caller=caller,
+                    now=NOW + timedelta(seconds=1),
+                    datasets=PostgresDatasetRepository(session),
+                )
+        stored = _reload(engine, submitted.command.id)
+        assert stored.status is TrainingCommandStatus.BOUND
+        assert stored.cancel_requested_at is None
+        assert stored.cancel_requested_by is None

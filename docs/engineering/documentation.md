@@ -61,11 +61,11 @@ After material instruction/runtime changes, check routing in a fresh session wit
 
 `make docs-check` runs the offline, standard-library document check. It verifies repository-local inline Markdown targets, heading/explicit-anchor fragments, that local targets belong to the repository inputs rather than ignored machine-only files, and that maintained first-party Markdown is reachable from `README.md` or `AGENTS.md`. Directory links enter that directory's `README.md` when one exists; they do not silently index all descendants. Use inline Markdown links for maintained navigation. Vendor content is excluded from editorial/link enforcement under [ADR-0007](../adr/0007-base-is-the-trunk-not-a-dependency.md).
 
-The check is also part of the existing repository policy, hence `make check-docs` and `make check`. It does not crawl external URLs, classify duplicated meaning or decide whether a requirement is obsolete; review owns those judgments. No document database, hash registry, mandatory timestamp refresh, word-count quota or new dependency is needed.
+The check is also part of the existing repository policy, hence `make check-docs` and `make check`. It does not crawl external URLs, classify duplicated meaning or decide whether a requirement is obsolete; review owns those judgments.
 
 ## Transitional links
 
-The [historical harness map](../design/repository-harness.md) retains only §1–§10 destinations for existing source/test comments. Retire it after those recorded consumers are migrated; it owns no rules. A locally installed review skill still locates [the old tracker entry](../agents/issue-tracker.md); keep that routing pointer until its path contract is updated.
+The [historical harness map](../design/repository-harness.md) retains only §1–§10 destinations for existing source/test comments. Retire it after those recorded consumers are migrated; it owns no rules. [Tracker configuration](../agents/issue-tracker.md) is the installed skills' entrypoint; keep it routed to the authoritative Issue rules.
 
 ## Reference methods adopted
 

@@ -6,7 +6,7 @@
 
 ## 快速开始
 
-开发实例固定从**主工作树 `main`**运行；任务修改必须从 `main` 新建 `agent/...` 分支和独立 worktree，不直接修改 `main`。
+开发实例固定从**主工作树 `main`**运行；已有任务继续使用原工作树，新任务从最新 `origin/main` 建立独立 `agent/...` 分支和 worktree，按[交付工作流](docs/engineering/workflow.md)实施，不直接修改 `main`。
 
 ```sh
 make hooks

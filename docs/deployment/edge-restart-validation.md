@@ -60,7 +60,7 @@ python3 scripts/validate_edge_restart.py snapshot \
 | 退出码 | 含义 |
 |---|---|
 | `0` | 采集完整（含 Center） |
-| `2` | 明确拒绝：schema 不是受支持版本（当前 `local_state` V19），或输入不合法/输出目标被拒（已存在、落在证据树、等于输入库），或本地 host_id 与 `--host-id` 不一致 |
+| `2` | 明确拒绝：schema 不在 [CLI 支持集合](../../scripts/validate_edge_restart.py) `SUPPORTED_SCHEMA_VERSIONS` 中，或输入不合法/输出目标被拒（已存在、落在证据树、等于输入库），或本地 host_id 与 `--host-id` 不一致 |
 | `3` | 采集不完整：未请求 `--center`，或 `psql`/libpq 不可用；已采集部分保留 |
 
 ## 比较命令与场景

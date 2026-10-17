@@ -1,51 +1,33 @@
 # Repository instructions
 
-NVSOP is the SOP compliance product monorepo. Verify actual code, configuration, branch, worktree and HEAD before relying on prose or prior session notes. [docs/README.md](docs/README.md) is the document index.
+NVSOP is the SOP compliance product monorepo. Verify actual code, configuration, branch, worktree and HEAD before relying on prose or prior session notes. [docs/README.md](docs/README.md) is the document index; `CLAUDE.md` routes here.
 
 ## Route the task
 
-Read guidance only when its trigger applies, expanding for affected callers or conflicting evidence:
+Read guidance when its trigger applies, expanding for affected callers or conflicting evidence:
 
-- **Plan or investigate:** deliver findings or the requested plan; start edits only when requested.
-- **Use Skills:** choose the task method under [Skills routing](docs/engineering/workflow.md#skills-routing); repository rules and operation authorization still apply.
-- **Implement code or scripts:** read [coding.md](docs/engineering/coding.md) and the implementation/verification sections of [workflow.md](docs/engineering/workflow.md). Locate the public entry, affected callers and existing tests first.
+- **Plan or investigate:** deliver findings or the requested plan; edit only when requested.
+- **Use Skills:** follow [Skills routing](docs/engineering/workflow.md#skills-routing); repository rules and operation authorization still apply.
+- **Implement code or scripts:** read [coding.md](docs/engineering/coding.md) and the implementation/verification sections of [workflow.md](docs/engineering/workflow.md); locate the public entry, affected callers and existing tests.
 - **Change repository shape, ownership or dependencies between modules:** read [architecture.md](docs/engineering/architecture.md).
-- **Add or change repository-local generated/ignored state; change CI, generated contracts, dependencies or vendor code:** read [maintenance.md](docs/engineering/maintenance.md) and [workflow.md](docs/engineering/workflow.md).
-- **Write, move or delete documentation/instructions:** read [documentation.md](docs/engineering/documentation.md) and the applicable validation/review sections of [workflow.md](docs/engineering/workflow.md).
-- **Work with Issues, labels or task dispatch:** read [issues.md](docs/engineering/issues.md).
-- **Create branches/worktrees, review, publish/update/refresh a PR, merge or clean up:** read the relevant step of [workflow.md](docs/engineering/workflow.md). Use native Git/GitHub operations and the versioned single-task cleanup; no separate landing/session-recovery workflow.
+- **Change generated/ignored state, CI, generated contracts, dependencies or vendor code:** read [maintenance.md](docs/engineering/maintenance.md) and the relevant [workflow](docs/engineering/workflow.md) sections.
+- **Write, move or delete documentation/instructions:** read [documentation.md](docs/engineering/documentation.md) and the validation/review sections of [workflow.md](docs/engineering/workflow.md).
+- **Work with Issues, labels or task dispatch:** read [Issue rules](docs/engineering/issues.md) and [tracker configuration](docs/agents/issue-tracker.md); before triage also read the [label mapping](docs/agents/triage-labels.md).
+- **Create branches/worktrees, review, publish/update/refresh a PR, merge or clean up:** follow the relevant [workflow](docs/engineering/workflow.md) step using native Git/GitHub operations and the versioned single-task cleanup.
 - **Change deployment or runtime configuration:** use the [deployment index](docs/README.md#部署与验证), then relevant architecture/verification rules.
-- **Change Edge autonomy, local persistence or Edge→Center reporting:** read [edge-autonomy.md](docs/design/mechanisms/edge-autonomy.md). Also read [architecture.md](docs/engineering/architecture.md) when moving ownership, a public seam or a dependency direction, and [the roadmap](docs/design/solution-and-roadmap.md) when changing approved product behavior or system structure.
-- **Name domain concepts or change product behavior:** use [CONTEXT.md](CONTEXT.md); for behavior/architecture read the affected mechanism and ADRs through [the roadmap](docs/design/solution-and-roadmap.md). Identify an ADR that needs reopening rather than silently overriding it.
+- **Change Edge autonomy, local persistence or Edge→Center reporting:** read [edge-autonomy.md](docs/design/mechanisms/edge-autonomy.md); also read [architecture.md](docs/engineering/architecture.md) when moving ownership, a public seam or a dependency direction, and [the roadmap](docs/design/solution-and-roadmap.md) when changing approved behavior or system structure.
+- **Explore/name domain concepts or change product behavior:** use [CONTEXT.md](CONTEXT.md); before domain exploration read the [domain configuration](docs/agents/domain.md). For behavior/architecture read affected mechanisms and ADRs through [the roadmap](docs/design/solution-and-roadmap.md); identify any ADR that needs reopening.
 
 ## Invariants
 
-- NVIDIA code in `vendor/sop-monitoring-blueprints/` is the product trunk, not an ordinary dependency. Reuse its capabilities; NVSOP judgment stays in `apps/edge-runtime/` behind the registered minimal hook. Two active implementations of one capability on one path are a defect.
-- The inference host is autonomous: judgment, violation latching, disposal and evidence buffering keep working while the center is unreachable. The center is management/aggregation, never the real-time error-proofing path.
-- The judgment core is a pure, standard-library-only function over normalized observations, independent of camera SDKs, inference frameworks and connectors.
+- Reuse NVIDIA capabilities in `vendor/sop-monitoring-blueprints/` as the product trunk; keep NVSOP judgment in `apps/edge-runtime/` behind the registered minimal hook and one active implementation per capability/path.
+- The inference host is autonomous: judgment, violation latching, disposal and evidence buffering continue when the center is unreachable. The center owns management/aggregation, not real-time error-proofing.
+- Keep the judgment core pure and standard-library-only over normalized observations, independent of camera SDKs, inference frameworks and connectors.
 - A module owns behavior, tables and migrations behind one small interface; callers and tests cross that same seam.
-- Keep secrets, credentials, customer media, model weights, generated data and production dumps out of Git. Fixtures are synthetic or explicitly sanitized.
+- Keep secrets, credentials, customer media, model weights, generated data and production dumps out of Git; fixtures are synthetic or explicitly sanitized.
 
 ## Execute and stop
 
-`main` is shared trunk and PR target, not a task workspace or direct-push destination. Use an isolated `agent/<agent-id>/<task-slug>` worktree; continue existing tasks where they are. Enable `make hooks` before ref changes and follow workflow.md without discarding unrelated work. `dev` is retired.
+Use an isolated `agent/<agent-id>/<task-slug>` worktree; continue existing tasks where they are. `main` is shared trunk and PR target, not a task workspace or direct-push destination; `dev` is retired. Enable `make hooks` before ref changes and preserve unrelated work.
 
-State risk, test reuse/additions and intended checks in at most three lines. Implement required contracts/failure paths directly; speculative fallback, retry, compatibility or integrity layers are not default work. Preserve required safety/security validation.
-
-Use the smallest affected checks while iterating; final code uses `make check`, documentation-only work `make check-docs`. Repository-policy and instruction changes still require the workflow's independent read-only review. One main session owns repairs and completion.
-
-Retain every acceptance criterion and report actual evidence/gaps. Stop optional tests/refactors once acceptance and required evidence are complete. Committed or pushed does not mean merge-ready; confirm one bounded [task lifecycle plan](docs/engineering/workflow.md#pr-lifecycle-approval) at task start for all intended delivery actions; in-scope repairs and successor SHAs renew evidence, not approval. Issue closure uses that plan when named there, or the separate explicit-instruction path in [issues.md](docs/engineering/issues.md#close-with-evidence).
-
-## Agent skills
-
-### Issue tracker
-
-Skills use GitHub Issues. Read the [tracker configuration](docs/agents/issue-tracker.md) and authoritative [Issue rules](docs/engineering/issues.md) before Issue work.
-
-### Triage labels
-
-Before triage, read the [canonical label mapping](docs/agents/triage-labels.md).
-
-### Domain docs
-
-Single-context. Before domain exploration, read the [domain configuration](docs/agents/domain.md).
+Confirm one bounded [task lifecycle plan](docs/engineering/workflow.md#pr-lifecycle-approval) for intended delivery actions; in-scope repairs renew evidence, not approval. Final code uses `make check`, documentation-only work `make check-docs`; policy and instruction changes require independent read-only review. Close Issues only under [Issue closure rules](docs/engineering/issues.md#close-with-evidence).

@@ -53,7 +53,7 @@ uv's package cache is a tool-owned shared-cache exception, like the pnpm store: 
 
 pnpm still requires workspace `node_modules/` layout for the current Vue toolchain, and editable Python installs can write `*.egg-info/` beside sources. These are explicit tool-layout exceptions rather than a second state root; `make local-purge` owns their removal. Direct tool invocation may also recreate legacy ignored cache paths, but supported Make commands use the locations above. Cleanup also owns the legacy Web build directory `apps/control-web/.nvsop/artifacts/web/dist/` and its empty parent directories, without deleting other state under that nested `.nvsop`.
 
-The primary `main` checkout synchronizes to accepted `origin/main` through verified merged `task-cleanup`, using [workflow.md §5.2](workflow.md#52-synchronize-main-and-clean-one-verified-task). Tracked, staged and ordinary untracked changes block it. Preserved ignored personal configuration/caches do not block a fast-forward unless it would overwrite them. The cleanup command purges declared task-local reproducible state after server proof and rechecks ignored state; unknown state still blocks. Cleanup requires the local task tip to equal the verified candidate and does not fetch/adopt a different PR head.
+After a verified merge, [workflow.md §5.2](workflow.md#52-synchronize-main-and-clean-one-verified-task) owns primary `main` synchronization and exact-task removal, including candidate identity, cleanliness and overwrite checks. The helper purges only the reproducible state declared here; unknown state blocks cleanup.
 
 ### Session binding state
 

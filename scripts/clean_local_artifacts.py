@@ -46,6 +46,8 @@ ENVIRONMENT_PATHS = (
     Path("apps/edge-runtime/.ruff_cache"),
     Path("apps/edge-runtime/.venv"),
     Path("packages/contracts/.pytest_cache"),
+    # 旧版 Web 构建将产物写到子项目 .nvsop；只清已知的 dist。
+    Path("apps/control-web/.nvsop/artifacts/web/dist"),
 )
 
 GENERATED_METADATA_ROOTS = (
@@ -78,12 +80,9 @@ def clean(root: Path = REPOSITORY_ROOT, *, purge: bool = False) -> list[Path]:
     removed: list[Path] = []
 
     paths = ARTIFACT_PATHS + ENVIRONMENT_PATHS if purge else ARTIFACT_PATHS
-    # .nvsop 自身是 symlink 时, 它下面的已声明名称可能是共享目标里的真实内容,
-    # 沿链接删除会吞掉不属于本仓库的状态; 跳过它们, 只保留自身 cache 子
-    # symlink 的 unlink 语义留给非链接根。
-    skip_nvsop_children = (root / ".nvsop").is_symlink()
+    # 不能沿父目录 symlink 删除共享目标中的缓存，包括旧版 Web .nvsop。
     for relative in paths:
-        if skip_nvsop_children and relative.parts[0] == ".nvsop":
+        if any((root / parent).is_symlink() for parent in relative.parents if parent != Path(".")):
             continue
         path = root / relative
         if (
@@ -105,12 +104,19 @@ def clean(root: Path = REPOSITORY_ROOT, *, purge: bool = False) -> list[Path]:
     if not purge:
         return removed
 
-    # purge 后只剩空的自有 .nvsop 根时把它一并移除, 否则 task-cleanup 仍会
-    # 被这个空目录阻碍。未知残留、绑定/dev-main 状态或符号链接都保留不动。
-    nvsop = root / ".nvsop"
-    if nvsop.is_dir() and not nvsop.is_symlink() and not any(nvsop.iterdir()):
-        nvsop.rmdir()
-        removed.append(Path(".nvsop"))
+    # 旧版 Web 的空父目录与任务根 .nvsop 一起收尾；未知状态仍保留。
+    for relative in (
+        Path("apps/control-web/.nvsop/artifacts/web"),
+        Path("apps/control-web/.nvsop/artifacts"),
+        Path("apps/control-web/.nvsop"),
+        Path(".nvsop"),
+    ):
+        path = root / relative
+        if any((root / parent).is_symlink() for parent in relative.parents if parent != Path(".")):
+            continue
+        if path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
+            path.rmdir()
+            removed.append(relative)
 
     generated: list[Path] = []
     for relative in GENERATED_METADATA_ROOTS:

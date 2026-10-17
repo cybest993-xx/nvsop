@@ -72,6 +72,37 @@ class CleanLocalArtifactsTest(unittest.TestCase):
         self.assertFalse((self.root / ".nvsop/cache").exists())
         self.assertFalse((self.root / ".nvsop").exists())
 
+    def test_purge_removes_legacy_web_build_and_empty_parents(self) -> None:
+        legacy = self.write("apps/control-web/.nvsop/artifacts/web/dist/index.html")
+
+        removed = clean(self.root, purge=True)
+
+        self.assertFalse(legacy.exists())
+        self.assertFalse((self.root / "apps/control-web/.nvsop").exists())
+        self.assertIn(Path("apps/control-web/.nvsop"), removed)
+
+    def test_purge_preserves_unknown_legacy_web_state(self) -> None:
+        legacy = self.write("apps/control-web/.nvsop/artifacts/web/dist/index.html")
+        unknown = self.write("apps/control-web/.nvsop/artifacts/other/info.json", "keep")
+        secret = self.write("apps/control-web/.nvsop/dev-main/secrets/password", "keep")
+
+        clean(self.root, purge=True)
+
+        self.assertFalse(legacy.exists())
+        self.assertEqual("keep", unknown.read_text())
+        self.assertEqual("keep", secret.read_text())
+
+    def test_purge_does_not_follow_legacy_web_state_symlink(self) -> None:
+        shared = self.write("shared/artifacts/web/dist/index.html", "keep")
+        link = self.root / "apps/control-web/.nvsop"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.root / "shared", target_is_directory=True)
+
+        clean(self.root, purge=True)
+
+        self.assertTrue(link.is_symlink())
+        self.assertEqual("keep", shared.read_text())
+
     def test_purge_keeps_nonempty_or_foreign_or_linked_nvsop_root(self) -> None:
         # 未知文件仍然保留: purge 不能吞掉未声明的任务状态。
         unknown = self.write(".nvsop/unknown-state/data.bin", "keep")

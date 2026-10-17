@@ -118,6 +118,39 @@ def health_report() -> ReportedHealth:
     )
 
 
+class ClockReportFactOrderTests(unittest.TestCase):
+    """来源事实序由已持久化的 health queue_id 生成,重试时签名载荷不变。"""
+
+    def test_source_queue_order_is_frozen_inside_clock_mirror_detail(self) -> None:
+        from edge_runtime.local_state.queues import PendingHealthReport
+        from edge_runtime.reporting import reported_health_from_pending
+
+        pending = PendingHealthReport(
+            queue_id=101,
+            station_id="station-a",
+            stream_id="clock:工件到位",
+            status="clock_verified",
+            reason_code=None,
+            detail=json.dumps({"timestamp_source": "device_clock", "offset_seconds": 0.003}),
+            occurred_at="2026-10-17T08:00:00Z",
+            source_anchor=None,
+            anchor_offset=None,
+            host_id="host-a",
+            configuration_json=None,
+            reported_at="2026-10-17T08:01:00Z",
+            attempts=1,
+            last_error="old network outage",
+        )
+        report = reported_health_from_pending(pending, reported_at=pending.reported_at or "")
+        assert report.event_id == "host-a:health:101"
+        assert json.loads(report.detail or "null")["edge_fact_order"] == 101
+        assert json.loads(report.detail or "null")["offset_seconds"] == 0.003
+        # 相同持久行被重试,旧信号不能获得新的来源序号。
+        assert (
+            reported_health_from_pending(pending, reported_at=pending.reported_at or "") == report
+        )
+
+
 class ReportCompatibilityTests(unittest.TestCase):
     def setUp(self) -> None:
         signing = patch(

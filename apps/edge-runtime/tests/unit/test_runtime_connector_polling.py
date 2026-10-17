@@ -29,7 +29,7 @@ from edge_runtime.judgment.evidence import EvidenceMargins
 from edge_runtime.judgment.model import HostInstant, Ordering, RuntimeParameters, Template
 from edge_runtime.local_state.store import open_local_state
 from edge_runtime.runtime import AutonomousStation
-from edge_runtime.supervisor.inputs import ActionRecognized, TimeAlignment
+from edge_runtime.supervisor.inputs import ActionRecognized, ClockEvidence
 from edge_runtime.supervisor.startup import resume_station
 
 
@@ -52,7 +52,7 @@ class PollingConnector:
         return Reading(
             state=PointState.ACTIVE,
             at=HostInstant(1.0),
-            alignment=TimeAlignment.ALIGNED,
+            clock=ClockEvidence.host_receipt(),
         )
 
     def write(self, point: object, state: object, /, *, timeout: float) -> Written:
@@ -119,7 +119,8 @@ class RuntimeConnectorPollingTest(unittest.TestCase):
         )
         self.assertEqual(10.0, cadence.next_due(now=10.0))
         self.assertEqual(10.0, cadence.next_due(now=10.05))
-        self.assertEqual(1, len(cadence.poll(now=10.0)))
+        # 首次轮询还包含一条不进入判定的来源证据, 原动作信号仍只发一次。
+        self.assertEqual(2, len(cadence.poll(now=10.0)))
         self.assertEqual(10.1, cadence.next_due(now=10.05))
 
         connector = PollingConnector()

@@ -24,6 +24,7 @@ from factory_sop.monitor.model import (
 )
 from factory_sop.monitor.usecases import (
     host_liveness,
+    latest_health_per_stream,
     list_instances,
     list_observations,
     list_violations,
@@ -1124,12 +1125,147 @@ def health(
     )
 
 
+def test_clock_mirror_retains_each_hosts_uncomparable_source_clock_state() -> None:
+    monitor = MemoryMonitor()
+    old_host = health(
+        "old-host-clock",
+        stream_id="clock:工件到位",
+        status="clock_verified",
+        received_at=datetime(2026, 9, 13, 0, 1, tzinfo=UTC),
+    )
+    second_host = "019937d8-0d10-7b31-8d2d-4e60c8f4f1ff"
+    new_host = health(
+        "new-host-clock",
+        stream_id="clock:工件到位",
+        status="clock_unverified",
+        received_at=datetime(2026, 9, 13, 0, 2, tzinfo=UTC),
+    )
+    new_host = replace(new_host, report=replace(new_host.report, host_id=second_host))
+    monitor.upsert_health(old_host)
+    monitor.upsert_health(new_host)
+    latest = latest_health_per_stream(tuple(monitor.health.values()))
+    assert len(latest) == 2
+    assert {(item.report.host_id, item.report.status) for item in latest} == {
+        (str(HOST_ID), "clock_verified"),
+        (second_host, "clock_unverified"),
+    }
+
+
+def test_clock_mirror_does_not_reactivate_older_verified_after_retry_reorders_delivery() -> None:
+    monitor = MemoryMonitor()
+    newer = health(
+        "host:health:102",
+        stream_id="clock:工件到位",
+        status="clock_unverified",
+        received_at=datetime(2026, 9, 13, 0, 1, tzinfo=UTC),
+        occurred_at="2026-09-13T08:00:00Z",
+    )
+    newer = replace(
+        newer,
+        report=replace(
+            newer.report,
+            detail=json.dumps(
+                {
+                    "edge_fact_order": 102,
+                    "offset_seconds": None,
+                }
+            ),
+        ),
+    )
+    older = health(
+        "host:health:101",
+        stream_id="clock:工件到位",
+        status="clock_verified",
+        received_at=datetime(2026, 9, 13, 0, 2, tzinfo=UTC),
+        occurred_at="2026-09-13T09:00:00Z",
+    )
+    older = replace(
+        older,
+        report=replace(
+            older.report,
+            detail=json.dumps(
+                {
+                    "edge_fact_order": 101,
+                    "offset_seconds": 0.003,
+                }
+            ),
+        ),
+    )
+    # 新状态先送达，旧状态稍后重试：中心接收顺序与来源事实顺序相反。
+    monitor.upsert_health(newer)
+    monitor.upsert_health(older)
+    latest = latest_health_per_stream(tuple(monitor.health.values()))
+    assert len(latest) == 1
+    assert latest[0].report.status == "clock_unverified"
+    assert latest[0].report.event_id == newer.report.event_id
+
+
+def test_clock_mirror_uses_center_ingestion_order_if_edge_wall_clock_moves_back() -> None:
+    monitor = MemoryMonitor()
+    monitor.upsert_health(
+        health(
+            "clock-before-rollback",
+            stream_id="clock:工件到位",
+            status="clock_verified",
+            received_at=datetime(2026, 9, 13, 0, 1, tzinfo=UTC),
+            occurred_at="2026-09-13T10:00:00Z",
+        )
+    )
+    monitor.upsert_health(
+        health(
+            "clock-after-rollback",
+            stream_id="clock:工件到位",
+            status="clock_unverified",
+            received_at=datetime(2026, 9, 13, 0, 2, tzinfo=UTC),
+            occurred_at="2026-09-13T08:00:00Z",
+        )
+    )
+    from factory_sop.monitor.usecases import latest_health_per_stream
+
+    latest = latest_health_per_stream(tuple(monitor.health.values()))
+    assert len(latest) == 1
+    assert latest[0].report.event_id == "clock-after-rollback"
+    assert latest[0].report.status == "clock_unverified"
+
+
 def test_stream_health_view_reports_no_runtime_data_without_facts() -> None:
     view = stream_health_view(
         MemoryMonitor(), caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)
     )
     assert view.validity == "no_data"
     assert view.streams == ()
+
+
+def test_connector_clock_mirror_is_not_a_latched_video_stream_impairment() -> None:
+    monitor = MemoryMonitor()
+    monitor.upsert_health(
+        health(
+            "clock-unverified",
+            stream_id="clock:工件到位",
+            status="clock_unverified",
+            received_at=datetime(2026, 9, 13, 0, 1, tzinfo=UTC),
+        )
+    )
+    no_stream = stream_health_view(
+        monitor, caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)
+    )
+    assert no_stream.validity == "no_data"
+    assert no_stream.streams == ()
+    monitor.upsert_health(
+        health(
+            "video-delivering",
+            stream_id="cam-a",
+            status="delivering",
+            received_at=datetime(2026, 9, 13, 0, 2, tzinfo=UTC),
+        )
+    )
+    view = stream_health_view(
+        monitor, caller=caller(Permission.MONITOR_VIEW), station_id=str(STATION_ID)
+    )
+    assert view.validity == "healthy"
+    assert [item.report.stream_id for item in view.streams] == ["cam-a"]
+    # 时钟未验证只影响当前外部信号的判定路径；镜像仍保留独立来源状态。
+    assert monitor.health["clock-unverified"].report.status == "clock_unverified"
 
 
 def test_stream_health_view_keeps_latest_per_stream_and_classifies() -> None:

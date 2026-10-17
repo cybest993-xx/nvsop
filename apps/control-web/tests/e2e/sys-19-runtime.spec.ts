@@ -400,3 +400,62 @@ test('SYS-23 — failure to read the archive stays visible and retry does not er
   await expect(page.getByRole('alert')).toContainText('归档服务暂不可用')
   await expect(archive).toContainText(history.event_id)
 })
+
+test('S063 — 运行镜像区分未验证偏移、已超阈值偏移与视频时间锚', async ({ page }) => {
+  const value = projection('indeterminate')
+  value.health.push(
+    {
+      event_id: 'clock-unknown',
+      host_id: 'host-19',
+      stream_id: 'clock:工件到位',
+      status: 'clock_unverified',
+      reason_code: 'IO_TIME_UNALIGNED',
+      detail: JSON.stringify({
+        timestamp_source: 'device_clock',
+        verification: 'unverified',
+        offset_seconds: null,
+        uncertainty_seconds: null,
+        host_receipt_monotonic: 42,
+      }),
+      occurred_at: '2026-10-17T08:00:00Z',
+      source_anchor: null,
+      anchor_offset: null,
+    },
+    {
+      event_id: 'clock-exceeded',
+      host_id: 'host-19',
+      stream_id: 'clock:下料完成',
+      status: 'clock_out_of_tolerance',
+      reason_code: 'IO_TIME_UNALIGNED',
+      detail: JSON.stringify({
+        timestamp_source: 'device_clock',
+        verification: 'out_of_tolerance',
+        offset_seconds: 0.205,
+        uncertainty_seconds: 0.005,
+        tolerance_seconds: 0.05,
+        host_receipt_monotonic: 43,
+      }),
+      occurred_at: '2026-10-17T08:01:00Z',
+      source_anchor: null,
+      anchor_offset: null,
+    },
+  )
+  await installStableRuntimeStream(page, value)
+  await standardRoutes(page, session.permissions)
+  await page.goto('/devices')
+  const clock = page.getByRole('region', { name: '连接器时间偏移' })
+  await expect(clock).toContainText('工件到位')
+  await expect(clock).toContainText('未验证（不可对齐）')
+  await expect(clock).toContainText('未测得，不以零偏移代替')
+  await expect(clock).toContainText('来源推理机：host-19')
+  await expect(clock).toContainText('下料完成')
+  await expect(clock).toContainText('偏移区间超阈值')
+  await expect(clock).toContainText('0.205 s')
+  await expect(clock).toContainText('0.005 s')
+  await expect(clock).toContainText('容差：0.050 s')
+  await expect(clock).toContainText('外部信号时间未对齐')
+  const streams = page.getByRole('region', { name: '各路观测健康' })
+  await expect(streams).toContainText('camera-19')
+  await expect(streams).not.toContainText('clock:工件到位')
+  await expect(page.getByRole('region', { name: '最新判定' })).toContainText('不可判定')
+})

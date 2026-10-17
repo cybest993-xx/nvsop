@@ -156,7 +156,22 @@ class RecordingCompressionTest(unittest.TestCase):
             sleep(0.01)
         self.assertEqual(worker.status().state, state)
 
-    def test_pause_confirms_real_process_stop_then_resumes_throttled_archive(self) -> None:
+    def test_readrate_limits_uninterrupted_archive_ingestion(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        worker = RecordingCompressionWorker(
+            configuration=replace(self.configuration(), readrate=0.25), interval=1.0
+        )
+        started = monotonic()
+        result = worker.drain()
+        # FFmpeg 按墙钟限速; 用无暂停编码验证速率, 避免暂停后的追赶影响计时。
+        # 下界给初始突发与帧重排留余量, 仍能识别未启用限速的真实编码。
+        self.assertGreater(monotonic() - started, 1.5)
+        self.assertEqual((result.replaced, result.failed), (1, 0))
+        self.assertEqual(recording_segment_generation(source), "compressed")
+
+    def test_pause_confirms_real_process_stop_and_freezes_timeout_until_resume(self) -> None:
         directory = self.recording / CAMERA
         segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
         source = next(directory.glob("*.mp4"))
@@ -167,7 +182,6 @@ class RecordingCompressionTest(unittest.TestCase):
         )
         results = []
         thread = Thread(target=lambda: results.append(worker.drain()))
-        started = monotonic()
         thread.start()
         try:
             self.wait_state(worker, "running")
@@ -183,14 +197,11 @@ class RecordingCompressionTest(unittest.TestCase):
             self.assertEqual(worker.drain().created, 0)
             other = RecordingCompressionWorker(configuration=self.configuration(), interval=1.0)
             self.assertEqual(other.drain().created, 0)
-            paused_at = monotonic()
             sleep(4.2)  # 超过命令超时, 但暂停不消耗实际执行预算。
-            paused_for = monotonic() - paused_at
             worker.resume()
             worker.resume()
             thread.join(15)
             self.assertFalse(thread.is_alive())
-            self.assertGreater(monotonic() - started - paused_for, 1.5)
             self.assertEqual((results[0].replaced, results[0].failed), (1, 0))
             self.assertEqual(recording_segment_generation(source), "compressed")
             self.assertEqual(worker.status().state, "idle")

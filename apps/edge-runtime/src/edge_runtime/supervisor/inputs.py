@@ -21,7 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import assert_never
+from math import isfinite
+from typing import Literal, assert_never
 
 from edge_runtime.judgment.model import (
     Event,
@@ -71,6 +72,138 @@ class TimeAlignment(Enum):
 
     ALIGNED = "aligned"
     UNALIGNED = "unaligned"
+
+
+def _classify_clock_offset(
+    lower: float, upper: float, tolerance: float
+) -> Literal["verified", "out_of_tolerance", "unverified"]:
+    """设备事件时钟偏移的完整可能区间, 越界/跨界时均不可用于判定。"""
+    if lower >= -tolerance and upper <= tolerance:
+        return "verified"
+    if lower > tolerance or upper < -tolerance:
+        return "out_of_tolerance"
+    return "unverified"
+
+
+@dataclass(frozen=True, slots=True)
+class ClockEvidence:
+    """连接器本次读数的来源与偏移证据;不跨宿主比较 monotonic。
+
+    只有设备提供实际事件 UTC 时间,且同一时源的主机 UTC 与实测最大投递延迟
+    均已知时,才可计算偏移区间。轮询的电平没有设备事件时间,不构造样本。
+    """
+
+    source: Literal["host_receipt", "device_clock", "unknown"]
+    status: Literal["host_receipt", "verified", "out_of_tolerance", "unverified"]
+    offset_seconds: float | None = None
+    uncertainty_seconds: float | None = None
+    device_event_utc: float | None = None
+    host_receipt_utc: float | None = None
+    max_delivery_delay_seconds: float | None = None
+    tolerance_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.source not in ("host_receipt", "device_clock", "unknown"):
+            raise ValueError("unsupported clock source")
+        if self.status not in ("host_receipt", "verified", "out_of_tolerance", "unverified"):
+            raise ValueError("unsupported clock status")
+        if self.status == "host_receipt" and self.source != "host_receipt":
+            raise ValueError("host receipt status requires host receipt source")
+        if self.status in ("verified", "out_of_tolerance") and self.source != "device_clock":
+            raise ValueError("verified offset requires device timestamp source")
+        values = (
+            self.offset_seconds,
+            self.uncertainty_seconds,
+            self.device_event_utc,
+            self.host_receipt_utc,
+            self.max_delivery_delay_seconds,
+            self.tolerance_seconds,
+        )
+        if any(value is not None for value in values):
+            if self.source != "device_clock" or any(value is None for value in values):
+                raise ValueError("device offset requires complete timestamp evidence")
+            device_event_utc = self.device_event_utc
+            host_receipt_utc = self.host_receipt_utc
+            if device_event_utc is None or host_receipt_utc is None:
+                raise ValueError("device timestamp evidence must include event and receipt")
+            if any(not isfinite(value) for value in values if value is not None):
+                raise ValueError("clock timestamps and offsets must be finite")
+            if self.max_delivery_delay_seconds is None or self.max_delivery_delay_seconds <= 0:
+                raise ValueError("measured delivery bound must be positive")
+            if self.tolerance_seconds is None or self.tolerance_seconds <= 0:
+                raise ValueError("clock tolerance must be positive")
+            lower = device_event_utc - host_receipt_utc
+            upper = lower + self.max_delivery_delay_seconds
+            if self.offset_seconds != (lower + upper) / 2:
+                raise ValueError("clock offset must match the actual device/host timestamps")
+            if self.uncertainty_seconds != self.max_delivery_delay_seconds / 2:
+                raise ValueError("clock uncertainty must match the measured delivery bound")
+            if self.status != _classify_clock_offset(lower, upper, self.tolerance_seconds):
+                raise ValueError("clock verification must match the measured offset interval")
+        elif self.status in ("verified", "out_of_tolerance"):
+            raise ValueError("verified or out-of-tolerance status requires measured evidence")
+
+    @classmethod
+    def host_receipt(cls) -> ClockEvidence:
+        return cls(source="host_receipt", status="host_receipt")
+
+    @classmethod
+    def unverified(
+        cls, source: Literal["host_receipt", "device_clock", "unknown"]
+    ) -> ClockEvidence:
+        return cls(source=source, status="unverified")
+
+    @classmethod
+    def from_device_timestamps(
+        cls,
+        *,
+        device_event_utc: float,
+        host_receipt_utc: float,
+        max_delivery_delay_seconds: float,
+        tolerance_seconds: float,
+    ) -> ClockEvidence:
+        """以真实设备事件时间和主机 UTC/投递时延界形成保守偏移区间。
+
+        有向传播延迟在 [0, max_delivery_delay_seconds];设备-主机偏移
+        因而在 [device_event_utc-host_receipt_utc, 该差+延迟上界]。
+        区间全部落入容差才允许 ALIGNED;全部在界外才称超阈值。
+        介于两者之间仍为未验证,不借估算中点放行。
+        """
+        values = (device_event_utc, host_receipt_utc, max_delivery_delay_seconds, tolerance_seconds)
+        if any(not isfinite(value) for value in values):
+            raise ValueError("clock sample and tolerance must be finite")
+        if max_delivery_delay_seconds <= 0 or tolerance_seconds <= 0:
+            raise ValueError("clock delivery bound and tolerance must be positive")
+        lower = device_event_utc - host_receipt_utc
+        upper = lower + max_delivery_delay_seconds
+        status = _classify_clock_offset(lower, upper, tolerance_seconds)
+        return cls(
+            source="device_clock",
+            status=status,
+            offset_seconds=(lower + upper) / 2,
+            uncertainty_seconds=max_delivery_delay_seconds / 2,
+            device_event_utc=device_event_utc,
+            host_receipt_utc=host_receipt_utc,
+            max_delivery_delay_seconds=max_delivery_delay_seconds,
+            tolerance_seconds=tolerance_seconds,
+        )
+
+    @property
+    def alignment(self) -> TimeAlignment:
+        return (
+            TimeAlignment.ALIGNED
+            if self.status in ("host_receipt", "verified")
+            else TimeAlignment.UNALIGNED
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ClockStatusObserved:
+    """供本地健康镜像持久化的点位时钟来源事实,不提交给判定核心。"""
+
+    signal: str
+    at: HostInstant | None
+    evidence: ClockEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +273,7 @@ class ValidityChanged:
 SupervisorInput = (
     ActionRecognized
     | ExternalSignal
+    | ClockStatusObserved
     | StreamHealthObserved
     | StorageHealthObserved
     | ValidityChanged
@@ -200,6 +334,8 @@ class Normalizer:
                     _misalignment(arriving.alignment),
                     Observation(signal=arriving.signal, at=arriving.at, source_time=None),
                 )
+            case ClockStatusObserved():
+                return ()
             case StreamHealthObserved():
                 return (
                     *self._momentary(self._reanchoring(arriving.event.source_anchor)),

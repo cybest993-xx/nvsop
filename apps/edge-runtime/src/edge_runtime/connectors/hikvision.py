@@ -61,7 +61,7 @@ from edge_runtime.connectors.port import (
     Written,
 )
 from edge_runtime.judgment.model import HostInstant
-from edge_runtime.supervisor.inputs import TimeAlignment
+from edge_runtime.supervisor.inputs import ClockEvidence
 
 BODY_LIMIT = 64 * 1024
 """How much of a response body is parsed at all.
@@ -329,9 +329,14 @@ class IsapiConnector:
         state = _port_state(body, self._profile)
         if isinstance(state, str):
             return Unreachable(detail=state)
-        return Reading(state=state, at=HostInstant(self._clock()), alignment=self._alignment())
+        evidence = self._clock_evidence()
+        return Reading(
+            state=state,
+            at=HostInstant(self._clock()),
+            clock=evidence,
+        )
 
-    def _alignment(self) -> TimeAlignment:
+    def _clock_evidence(self) -> ClockEvidence:
         """这次读数能不能落在视频时间轴上 (§5.8).
 
         轮询适配器只在答案到达时读主机时钟, 因此只有 ``HOST_RECEIPT`` 按构造对齐: 它的误差不超过
@@ -340,12 +345,12 @@ class IsapiConnector:
         时间戳, 偏移不可用; 未验证的能力连投递延迟都没有测量值. 凭空报 ``ALIGNED`` 会把一个放不上
         时间轴的信号变成可判不通过的输入 (§5.8, §5.2).
         """
-        if (
-            isinstance(self._capability, Measured)
-            and self._capability.timestamps is TimestampSource.HOST_RECEIPT
-        ):
-            return TimeAlignment.ALIGNED
-        return TimeAlignment.UNALIGNED
+        if not isinstance(self._capability, Measured):
+            return ClockEvidence.unverified("unknown")
+        if self._capability.timestamps is TimestampSource.HOST_RECEIPT:
+            return ClockEvidence.host_receipt()
+        # 轮询只有电平没有设备事件时刻; 此处不虚构设备-主机时间偏移。
+        return ClockEvidence.unverified("device_clock")
 
 
 def _port_state(body: str, profile: IsapiProfile) -> PointState | str:

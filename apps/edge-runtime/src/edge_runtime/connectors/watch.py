@@ -3,13 +3,12 @@
 The adapter answers with a level; judgment needs an event. That conversion is this module,
 and it is the whole of what stands between a connector and the judgment path — deliberately,
 because §5.8 forbids judgment branching on whether a connector is configured. What leaves here
-is `ExternalSignal` and `ValidityChanged`, both of which the supervisor already normalizes for
-the SSE side (`supervisor/inputs.py`); a station with three connectors and one with none reach
-the core through the same two types.
+is `ExternalSignal`, `ValidityChanged` and `ClockStatusObserved`: time evidence is a
+separate durable health fact and never a judgment event. A station with three connectors and
+one with none still use the same judgment path.
 
-Nothing here judges. The two facts it reports are ones the connector holds first-hand and
-nobody else can: the point could not be read, and — carried through from the adapter — the
-reading could not be placed on the video timeline.
+Nothing here judges. The connector reports the observed point level, read failures and
+the time evidence it actually holds, including unknown or out-of-tolerance source clocks.
 
 Standard library only (edge-autonomy.md §5.11).
 """
@@ -26,6 +25,8 @@ from edge_runtime.connectors.port import (
 )
 from edge_runtime.judgment.reasons import ReasonCode
 from edge_runtime.supervisor.inputs import (
+    ClockEvidence,
+    ClockStatusObserved,
     ExternalSignal,
     SupervisorInput,
     Validity,
@@ -49,6 +50,7 @@ class PointWatch:
         Cleared on a gap rather than kept: 断线 means we stopped seeing, and holding the
         pre-gap level would let the runtime answer questions about a window it was blind for.
         """
+        self._clock: ClockEvidence | None = None
         self._reachable = True
         """Starts true so a runtime that never fails reports nothing. The first failed read
         is the transition that reports the impairment."""
@@ -59,7 +61,7 @@ class PointWatch:
             case Unreachable():
                 return self._lost()
             case Reading():
-                return (*self._regained(), *self._edge(result))
+                return (*self._regained(), *self._clock_fact(result), *self._edge(result))
 
     def _lost(self) -> tuple[SupervisorInput, ...]:
         """The point stopped answering. Reported once, and it lasts until a read succeeds.
@@ -68,10 +70,19 @@ class PointWatch:
         core's impairment record is a set — the repeats would add nothing but volume.
         """
         self._state = None
+        previous_clock, self._clock = self._clock, None
         if not self._reachable:
             return ()
         self._reachable = False
-        return (ValidityChanged(reason=ReasonCode.IO_SIGNAL_LOST, now=Validity.IMPAIRED),)
+        facts: tuple[SupervisorInput, ...] = (
+            ValidityChanged(reason=ReasonCode.IO_SIGNAL_LOST, now=Validity.IMPAIRED),
+        )
+        # 首次读取即失联也要覆盖旧进程的已验证镜像; 不能声称知道新主机的偏移。
+        source = "unknown" if previous_clock is None else previous_clock.source
+        return (
+            *facts,
+            ClockStatusObserved(self._point.label, None, ClockEvidence.unverified(source)),
+        )
 
     def _regained(self) -> tuple[SupervisorInput, ...]:
         """A read succeeded after a gap.
@@ -85,6 +96,18 @@ class PointWatch:
             return ()
         self._reachable = True
         return (ValidityChanged(reason=ReasonCode.IO_SIGNAL_LOST, now=Validity.RESTORED),)
+
+    def _clock_fact(self, reading: Reading) -> tuple[SupervisorInput, ...]:
+        """只记录时间来源/分类的转换, 不因原始 UTC 样本连续变化挤满本机待办。"""
+        evidence = reading.clock
+        previous = self._clock
+        if previous is not None and (previous.source, previous.status) == (
+            evidence.source,
+            evidence.status,
+        ):
+            return ()
+        self._clock = evidence
+        return (ClockStatusObserved(self._point.label, reading.at, evidence),)
 
     def _edge(self, reading: Reading) -> tuple[SupervisorInput, ...]:
         """The observation, when this reading is a change to active.

@@ -48,7 +48,7 @@ from edge_runtime.connectors.port import (
     Written,
 )
 from edge_runtime.judgment.model import HostInstant
-from edge_runtime.supervisor.inputs import TimeAlignment
+from edge_runtime.supervisor.inputs import ClockEvidence
 
 ARRIVAL = InputPoint(label="工件到位", address="1")
 INTERLOCK = OutputPoint(label="停线联锁", address="1")
@@ -148,7 +148,11 @@ class ReadingAnInputPointTest(unittest.TestCase):
         transport = FakeTransport(answer=Response(body=ACTIVE_STATUS))
 
         self.assertEqual(
-            Reading(state=PointState.ACTIVE, at=HostInstant(NOW), alignment=TimeAlignment.ALIGNED),
+            Reading(
+                state=PointState.ACTIVE,
+                at=HostInstant(NOW),
+                clock=ClockEvidence.host_receipt(),
+            ),
             connector(transport).read(ARRIVAL, timeout=TIMEOUT),
             "host receipt is this adapter's declared timestamp source, so the instant is the "
             "monotonic reading taken when the answer arrived, and it is aligned by "
@@ -160,7 +164,9 @@ class ReadingAnInputPointTest(unittest.TestCase):
 
         self.assertEqual(
             Reading(
-                state=PointState.INACTIVE, at=HostInstant(NOW), alignment=TimeAlignment.ALIGNED
+                state=PointState.INACTIVE,
+                at=HostInstant(NOW),
+                clock=ClockEvidence.host_receipt(),
             ),
             connector(transport).read(ARRIVAL, timeout=TIMEOUT),
         )
@@ -185,7 +191,7 @@ class OnlyAHostReceiptReadingCanBePlacedOnTheTimelineTest(unittest.TestCase):
             Reading(
                 state=PointState.ACTIVE,
                 at=HostInstant(NOW),
-                alignment=TimeAlignment.UNALIGNED,
+                clock=ClockEvidence.unverified("device_clock"),
             ),
             connector(
                 transport,
@@ -203,7 +209,7 @@ class OnlyAHostReceiptReadingCanBePlacedOnTheTimelineTest(unittest.TestCase):
             Reading(
                 state=PointState.ACTIVE,
                 at=HostInstant(NOW),
-                alignment=TimeAlignment.UNALIGNED,
+                clock=ClockEvidence.unverified("unknown"),
             ),
             connector(transport, capability=Unverified()).read(ARRIVAL, timeout=TIMEOUT),
             "the fall-through is fail-closed rather than exhaustive-by-accident: a capability "
@@ -394,7 +400,11 @@ class TheAdapterHoldsNoWireShapeOfItsOwnTest(unittest.TestCase):
         result = connector(transport, profile=OTHER_FIRMWARE).read(ARRIVAL, timeout=TIMEOUT)
 
         self.assertEqual(
-            Reading(state=PointState.ACTIVE, at=HostInstant(NOW), alignment=TimeAlignment.ALIGNED),
+            Reading(
+                state=PointState.ACTIVE,
+                at=HostInstant(NOW),
+                clock=ClockEvidence.host_receipt(),
+            ),
             result,
         )
         self.assertEqual([("GET", "/ISAPI/IO/inputs/1", None, TIMEOUT)], transport.calls)

@@ -360,7 +360,13 @@ def stream_health_view(
     """
     authorize(caller, Permission.MONITOR_VIEW)
     reports = monitor.health_for_station(station_id=station_id)
-    latest = latest_health_per_stream(reports)
+    # 连接器时钟状态独立于视频流健康。它只影响携带该事实的外部信号，
+    # 不得把最新一次时钟未验证状态锁存成整路流的持续失效。
+    latest = tuple(
+        item
+        for item in latest_health_per_stream(reports)
+        if not (item.report.stream_id or "").startswith("clock:")
+    )
     if not latest:
         return StreamHealthView(station_id=station_id, validity="no_data", streams=())
     validity = (
@@ -373,21 +379,60 @@ def stream_health_view(
 
 
 def latest_health_per_stream(reports: tuple[MirroredHealth, ...]) -> tuple[MirroredHealth, ...]:
-    """每路流按 edge 事件时间保留最新事实；Center ingestion sequence 只服务 SSE。
+    """视频源以冻结事件时间排序; 时钟状态同主机按 SQLite 来源序号排序。
 
-    monitor owner 唯一的健康业务分类：SSE 投影与工位视图都复用它，不另造排序。
+    Edge 可先重试新事实再补送旧事实, 且本机墙钟可回拨; 两者均不能
+    使旧 clock_verified 遮盖新 clock_unverified。独立主机的 clock 镜像
+    分别保留, 不混比其 SQLite 顺序; 缺来源序的旧行才依 Center 接收序。
     """
-    latest: dict[str | None, MirroredHealth] = {}
+    latest: dict[str | tuple[str, str] | None, MirroredHealth] = {}
     for report in reports:
-        key = report.report.stream_id
+        stream_id = report.report.stream_id
+        # 各主机的 SQLite 事实序号彼此不可比; 时钟镜像须按主机分别留存。
+        key = (
+            (report.report.host_id, stream_id)
+            if stream_id is not None and stream_id.startswith("clock:")
+            else stream_id
+        )
         current = latest.get(key)
-        if current is None or _health_event_order(report) > _health_event_order(current):
+        if current is None or _health_event_is_newer(report, current):
             latest[key] = report
     return tuple(latest.values())
 
 
+def _clock_source_order(value: MirroredHealth) -> int | None:
+    """同一 Edge 的持久健康队列序号; 旧报告缺字段时不虚构来源顺序。"""
+    detail = value.report.detail
+    if detail is None:
+        return None
+    try:
+        payload = json.loads(detail)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    order = payload.get("edge_fact_order")
+    return order if type(order) is int and order > 0 else None
+
+
+def _health_event_is_newer(candidate: MirroredHealth, current: MirroredHealth) -> bool:
+    """同主机 clock 事实按本地发生序; 跨主机不比较两个独立 SQLite 序号。"""
+    if (candidate.report.stream_id or "").startswith(
+        "clock:"
+    ) and candidate.report.host_id == current.report.host_id:
+        incoming, previous = _clock_source_order(candidate), _clock_source_order(current)
+        if incoming is not None and previous is not None:
+            return (incoming, candidate.stream_sequence or 0) > (
+                previous,
+                current.stream_sequence or 0,
+            )
+    return _health_event_order(candidate) > _health_event_order(current)
+
+
 def _health_event_order(value: MirroredHealth) -> tuple[float, str]:
-    """使用冻结的事件时间锚排序；event_id 仅为相同时刻提供稳定次序。"""
+    """视频源用冻结事件时间, 时钟镜像不信任可能回拨的 Edge 墙钟。"""
+    if (value.report.stream_id or "").startswith("clock:"):
+        return float(value.stream_sequence or 0), value.report.event_id
     return _health_occurred_at(value.report), value.report.event_id
 
 

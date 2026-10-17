@@ -422,9 +422,12 @@ onUnmounted(() => {
         </section>
         <section aria-label="连接器时间偏移">
           <h4>连接器时间偏移与验证状态</h4>
-          <p class="muted">偏移只来自可核验的设备事件时间；单调钟只在同一主机内比较。</p>
+          <p class="muted">
+            偏移只来自可核验的设备事件时间；不同推理机分别展示最后已知事实，不比较其单调钟或推断当前在役。
+          </p>
           <article v-for="{ fact, evidence } in clockRows(p)" :key="fact.event_id">
             <strong>{{ fact.stream_id?.slice(6) ?? '未知点位' }}</strong>
+            <p>来源推理机：{{ fact.host_id }}</p>
             <p>
               来源：{{ clockSources[String(evidence.timestamp_source)] ?? '未知来源' }}； 状态：{{
                 clockStatuses[fact.status] ?? `未识别状态（${fact.status}）`

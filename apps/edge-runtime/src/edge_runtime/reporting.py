@@ -502,6 +502,14 @@ def reported_health_from_pending(
 ) -> ReportedHealth:
     """映射本地持久健康事实; 发生时刻与首次发送时刻各保留其原义。"""
     event_id = f"{pending.host_id}:health:{pending.queue_id}"
+    detail = pending.detail
+    if pending.stream_id is not None and pending.stream_id.startswith("clock:"):
+        # 身份已在 SQLite 固定; 重试仍保留原始入队顺序, 不取可能回拨的墙钟。
+        if detail is None:
+            raise ValueError("clock health report requires evidence detail")
+        detail = json.dumps(
+            {**json.loads(detail), "edge_fact_order": pending.queue_id}, ensure_ascii=False
+        )
     return ReportedHealth(
         event_id=event_id,
         trace_id=event_id,
@@ -510,7 +518,7 @@ def reported_health_from_pending(
         stream_id=pending.stream_id,
         status=pending.status,
         reason_code=pending.reason_code,
-        detail=pending.detail,
+        detail=detail,
         occurred_at=pending.occurred_at,
         source_anchor=pending.source_anchor,
         anchor_offset=pending.anchor_offset,

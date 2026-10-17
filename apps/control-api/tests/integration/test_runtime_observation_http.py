@@ -1564,6 +1564,63 @@ def test_clock_offset_health_survives_authenticated_pg_mirror_without_false_stre
     assert newest["anchor_offset"] is None
 
 
+def test_clock_mirror_ignores_late_retry_of_older_verified_fact(
+    engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
+) -> None:
+    settings = settings_for(engine, storage_root=dataset_storage_root)
+    host_id = str(runtime_topology.host.id)
+    station_id = str(runtime_topology.station.id)
+    path = f"{API_PREFIX}/monitor/health"
+    newer = ReportedHealth(
+        event_id=f"{host_id}:health:102",
+        trace_id=f"{host_id}:health:102",
+        host_id=host_id,
+        station_id=station_id,
+        stream_id="clock:工件到位",
+        status="clock_unverified",
+        reason_code="IO_TIME_UNALIGNED",
+        detail=json.dumps(
+            {"timestamp_source": "device_clock", "offset_seconds": None, "edge_fact_order": 102}
+        ),
+        occurred_at="2026-10-17T08:00:00Z",
+        source_anchor=None,
+        anchor_offset=None,
+        reported_at="2026-10-17T08:01:00Z",
+    )
+    older = replace(
+        newer,
+        event_id=f"{host_id}:health:101",
+        trace_id=f"{host_id}:health:101",
+        status="clock_verified",
+        reason_code=None,
+        detail=json.dumps(
+            {"timestamp_source": "device_clock", "offset_seconds": 0.003, "edge_fact_order": 101}
+        ),
+        occurred_at="2026-10-17T09:00:00Z",
+        reported_at="2026-10-17T09:01:00Z",
+    )
+    with client_for(engine, settings, permissions=frozenset({Permission.MONITOR_VIEW})) as client:
+        for source in (newer, older):
+            body = reported_health_to_wire(source)
+            response = client.post(
+                path,
+                json=body,
+                headers=_host_headers(runtime_topology, method="POST", path=path, body=body),
+            )
+            assert response.status_code == 200
+            assert response.json()["duplicate"] is False
+        snapshot = client.get(f"{API_PREFIX}/monitor/stream", params={"once": "true"})
+    assert snapshot.status_code == 200
+    latest = next(
+        json.loads(fragment.split("data: ", 1)[1])
+        for fragment in snapshot.text.split("\n\n")
+        if fragment.startswith("event: runtime\n")
+    )
+    assert len(latest["health"]) == 1
+    assert latest["health"][0]["status"] == "clock_unverified"
+    assert json.loads(latest["health"][0]["detail"])["edge_fact_order"] == 102
+
+
 def test_reported_violation_is_archived_idempotently_and_queryable(
     engine: Engine, runtime_topology: RuntimeTopology, dataset_storage_root: Path
 ) -> None:

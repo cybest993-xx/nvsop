@@ -217,6 +217,12 @@ ROUTES = [
         {"public_key": DEFAULT_HOST_IDENTITY.public_key},
         headers={"If-Match": "1"},
     ),
+    Target(
+        "POST",
+        "/inference-hosts/{host_id}/recording-compression/commands",
+        {"action": "inspect"},
+        headers={"Idempotency-Key": "authorization-compression-inspect"},
+    ),
     Target("DELETE", "/inference-hosts/{host_id}", headers={"If-Match": "1"}),
     Target(
         "POST",
@@ -626,6 +632,8 @@ EXEMPT = {
     ("POST", f"{API_PREFIX}/auth/session"),
     ("DELETE", f"{API_PREFIX}/auth/session"),
     ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/result"),
+    # 压缩结果回报只接受登记主机签名; 实际签名边界由 S049 route/system 证明。
+    ("POST", f"{API_PREFIX}/device-commands/compression/{{command_id}}/result"),
     # 再切片结果回报同样是主机签名机器端点, 不接受浏览器会话或人类权限。
     ("POST", f"{API_PREFIX}/device-commands/{{command_id}}/reclip-result"),
     # 主机配置上报用公钥签名认证，不接受浏览器会话或人类权限。

@@ -67,6 +67,7 @@ const navigation: NavigationItem[] = [
       'monitor.report.view',
       'execution.handover.edit',
       'retention.policy.view',
+      'device.inference_host.view',
     ],
   },
   {

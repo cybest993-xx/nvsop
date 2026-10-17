@@ -554,6 +554,7 @@ class PendingCommandType(StrEnum):
     RECLIP_EVIDENCE = "reclip_evidence"
     # 正常交权只允许专用主机端点领取，旧 Edge 默认命令端点不会取到。
     STOP_EXECUTION_HANDOVER = "stop_execution_handover"
+    CONTROL_RECORDING_COMPRESSION = "control_recording_compression"
 
 
 class PendingCommandStatus(StrEnum):
@@ -589,6 +590,8 @@ class PendingCommand:
     created_at: datetime
     updated_at: datetime
     result_credentials_configured: bool | None = None
+    compression_action: str | None = None
+    compression_result: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not self.idempotency_key or len(self.idempotency_key) > 128:
@@ -612,6 +615,7 @@ class PendingCommandCompletion:
     failure_code: str | None
     completed_at: datetime
     result_credentials_configured: bool | None = None
+    compression_result: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         if self.result is not None and self.result_credentials_configured is not True:

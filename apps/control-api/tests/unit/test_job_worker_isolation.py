@@ -371,14 +371,20 @@ def test_blocking_jobs_leave_event_loop_responsive_and_cancel_promptly(
             assert stale_after_seconds == 330
 
         def pending(
-            self, *, limit: int, configured_training_types: frozenset[JobType] = frozenset()
+            self,
+            *,
+            limit: int,
+            configured_training_types: frozenset[JobType] = frozenset(),
+            include_augmentation: bool = False,
         ) -> tuple[object, ...]:
             assert limit == 100
             assert configured_training_types == frozenset()
+            assert include_augmentation is False
             return ()
 
     class FakeDispatcher:
         configured_training_types: frozenset[JobType] = frozenset()
+        augmentation_configured = False
 
         async def dispatch_async(self, job_id: UUID) -> None:
             raise AssertionError(f"no pending jobs expected: {job_id}")

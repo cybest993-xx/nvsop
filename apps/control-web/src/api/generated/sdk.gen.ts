@@ -42,6 +42,9 @@ import type {
   ClaimNextReclipCommandData,
   ClaimNextReclipCommandErrors,
   ClaimNextReclipCommandResponses,
+  ClaimRecordingCompressionData,
+  ClaimRecordingCompressionErrors,
+  ClaimRecordingCompressionResponses,
   CompleteDeviceCommandData,
   CompleteDeviceCommandErrors,
   CompleteDeviceCommandResponses,
@@ -51,6 +54,9 @@ import type {
   CompleteReclipCommandData,
   CompleteReclipCommandErrors,
   CompleteReclipCommandResponses,
+  CompleteRecordingCompressionData,
+  CompleteRecordingCompressionErrors,
+  CompleteRecordingCompressionResponses,
   ConfirmHandoverData,
   ConfirmHandoverErrors,
   ConfirmHandoverResponses,
@@ -168,6 +174,9 @@ import type {
   EnqueueConnectorConnectionTestData,
   EnqueueConnectorConnectionTestErrors,
   EnqueueConnectorConnectionTestResponses,
+  EnqueueRecordingCompressionData,
+  EnqueueRecordingCompressionErrors,
+  EnqueueRecordingCompressionResponses,
   EstimateRetentionPolicyImpactData,
   EstimateRetentionPolicyImpactErrors,
   EstimateRetentionPolicyImpactResponses,
@@ -354,6 +363,9 @@ import type {
   ReadPointData,
   ReadPointErrors,
   ReadPointResponses,
+  ReadRecordingCompressionCommandData,
+  ReadRecordingCompressionCommandErrors,
+  ReadRecordingCompressionCommandResponses,
   ReadRetentionPolicyData,
   ReadRetentionPolicyErrors,
   ReadRetentionPolicyResponses,
@@ -1032,6 +1044,45 @@ export const setConnectorStatus = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: '/api/v1/connectors/{connector_id}/status',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Claim
+ */
+export const claimRecordingCompression = <ThrowOnError extends boolean = false>(
+  options: Options<ClaimRecordingCompressionData, ThrowOnError>,
+): RequestResult<
+  ClaimRecordingCompressionResponses,
+  ClaimRecordingCompressionErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ClaimRecordingCompressionResponses,
+    ClaimRecordingCompressionErrors,
+    ThrowOnError
+  >({ url: '/api/v1/device-commands/compression/next', ...options })
+
+/**
+ * Complete
+ */
+export const completeRecordingCompression = <ThrowOnError extends boolean = false>(
+  options: Options<CompleteRecordingCompressionData, ThrowOnError>,
+): RequestResult<
+  CompleteRecordingCompressionResponses,
+  CompleteRecordingCompressionErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    CompleteRecordingCompressionResponses,
+    CompleteRecordingCompressionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/device-commands/compression/{command_id}/result',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -1786,6 +1837,48 @@ export const exportInferenceHostMediaConfiguration = <ThrowOnError extends boole
     ExportInferenceHostMediaConfigurationErrors,
     ThrowOnError
   >({ url: '/api/v1/inference-hosts/{host_id}/media-configuration', ...options })
+
+/**
+ * Enqueue
+ */
+export const enqueueRecordingCompression = <ThrowOnError extends boolean = false>(
+  options: Options<EnqueueRecordingCompressionData, ThrowOnError>,
+): RequestResult<
+  EnqueueRecordingCompressionResponses,
+  EnqueueRecordingCompressionErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    EnqueueRecordingCompressionResponses,
+    EnqueueRecordingCompressionErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts/{host_id}/recording-compression/commands',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+/**
+ * Read Command
+ */
+export const readRecordingCompressionCommand = <ThrowOnError extends boolean = false>(
+  options: Options<ReadRecordingCompressionCommandData, ThrowOnError>,
+): RequestResult<
+  ReadRecordingCompressionCommandResponses,
+  ReadRecordingCompressionCommandErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).get<
+    ReadRecordingCompressionCommandResponses,
+    ReadRecordingCompressionCommandErrors,
+    ThrowOnError
+  >({
+    url: '/api/v1/inference-hosts/{host_id}/recording-compression/commands/{command_id}',
+    ...options,
+  })
 
 /**
  * Set The Host Status

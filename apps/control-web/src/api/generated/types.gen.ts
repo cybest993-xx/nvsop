@@ -465,6 +465,7 @@ export type ApiErrorCode =
   | 'COMMAND_CLAIM_EXPIRED'
   | 'COMMAND_CLAIM_TOKEN_INVALID'
   | 'COMMAND_ALREADY_COMPLETED'
+  | 'COMMAND_OBSERVATION_UNCONFIRMED'
   | 'COMMAND_IDEMPOTENCY_CONFLICT'
   | 'COMMAND_CONFIGURATION_CHANGED'
   | 'COMMAND_TARGET_NOT_FOUND'
@@ -1192,6 +1193,104 @@ export type CameraView = {
    * Updated By
    */
   updated_by: string
+}
+
+/**
+ * CompressionClaimView
+ */
+export type CompressionClaimView = {
+  /**
+   * Action
+   */
+  action: 'inspect' | 'pause' | 'resume' | 'abort'
+  /**
+   * Claim Token
+   */
+  claim_token: string
+  /**
+   * Command Id
+   */
+  command_id: string
+  /**
+   * Command Type
+   */
+  command_type?: 'control_recording_compression'
+  /**
+   * Lease Expires At
+   */
+  lease_expires_at: number
+}
+
+/**
+ * CompressionCommandView
+ */
+export type CompressionCommandView = {
+  /**
+   * Action
+   */
+  action: 'inspect' | 'pause' | 'resume' | 'abort'
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Host Id
+   */
+  host_id: string
+  /**
+   * Id
+   */
+  id: string
+  observation: CompressionObservation | null
+  /**
+   * Observed At
+   */
+  observed_at: string | null
+  status: PendingCommandStatus
+}
+
+/**
+ * CompressionInput
+ */
+export type CompressionInput = {
+  /**
+   * Action
+   */
+  action: 'inspect' | 'pause' | 'resume' | 'abort'
+}
+
+/**
+ * CompressionObservation
+ */
+export type CompressionObservation = {
+  /**
+   * Detail
+   */
+  detail: string | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Pid
+   */
+  pid: number | null
+  /**
+   * Readrate
+   */
+  readrate: number | null
+  /**
+   * Requested
+   */
+  requested: string
+  /**
+   * Segment
+   */
+  segment: string | null
+  /**
+   * State
+   */
+  state: string
 }
 
 /**
@@ -3647,7 +3746,10 @@ export type PendingCommandStatus = 'pending' | 'claimed' | 'succeeded' | 'failed
  * 推理机从中心领取的设备命令类型。
  */
 export type PendingCommandType =
-  'test_connector_connection' | 'reclip_evidence' | 'stop_execution_handover'
+  | 'test_connector_connection'
+  | 'reclip_evidence'
+  | 'stop_execution_handover'
+  | 'control_recording_compression'
 
 /**
  * PendingCommandView
@@ -7039,6 +7141,125 @@ export type SetConnectorStatusResponses = {
 export type SetConnectorStatusResponse =
   SetConnectorStatusResponses[keyof SetConnectorStatusResponses]
 
+export type ClaimRecordingCompressionData = {
+  body?: never
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+  }
+  path?: never
+  query?: never
+  url: '/api/v1/device-commands/compression/next'
+}
+
+export type ClaimRecordingCompressionErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Inference host is not allowed to access this command
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ClaimRecordingCompressionError =
+  ClaimRecordingCompressionErrors[keyof ClaimRecordingCompressionErrors]
+
+export type ClaimRecordingCompressionResponses = {
+  /**
+   * Successful Response
+   */
+  200: CompressionClaimView
+  /**
+   * No pending command
+   */
+  204: void
+}
+
+export type ClaimRecordingCompressionResponse =
+  ClaimRecordingCompressionResponses[keyof ClaimRecordingCompressionResponses]
+
+export type CompleteRecordingCompressionData = {
+  body: CompressionObservation
+  headers: {
+    /**
+     * X-Inference-Host-Id
+     */
+    'X-Inference-Host-ID': string
+    /**
+     * X-Command-Claim-Token
+     */
+    'X-Command-Claim-Token': string
+  }
+  path: {
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/device-commands/compression/{command_id}/result'
+}
+
+export type CompleteRecordingCompressionErrors = {
+  /**
+   * Inference host authentication failed
+   */
+  401: ProblemDocument
+  /**
+   * Inference host is not allowed to access this command
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CompleteRecordingCompressionError =
+  CompleteRecordingCompressionErrors[keyof CompleteRecordingCompressionErrors]
+
+export type CompleteRecordingCompressionResponses = {
+  /**
+   * Successful Response
+   */
+  200: CompressionCommandView
+}
+
+export type CompleteRecordingCompressionResponse =
+  CompleteRecordingCompressionResponses[keyof CompleteRecordingCompressionResponses]
+
 export type ClaimNextExecutionHandoverCommandData = {
   body?: never
   headers: {
@@ -9137,6 +9358,120 @@ export type ExportInferenceHostMediaConfigurationResponses = {
 
 export type ExportInferenceHostMediaConfigurationResponse =
   ExportInferenceHostMediaConfigurationResponses[keyof ExportInferenceHostMediaConfigurationResponses]
+
+export type EnqueueRecordingCompressionData = {
+  body: CompressionInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/recording-compression/commands'
+}
+
+export type EnqueueRecordingCompressionErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type EnqueueRecordingCompressionError =
+  EnqueueRecordingCompressionErrors[keyof EnqueueRecordingCompressionErrors]
+
+export type EnqueueRecordingCompressionResponses = {
+  /**
+   * Successful Response
+   */
+  202: CompressionCommandView
+}
+
+export type EnqueueRecordingCompressionResponse =
+  EnqueueRecordingCompressionResponses[keyof EnqueueRecordingCompressionResponses]
+
+export type ReadRecordingCompressionCommandData = {
+  body?: never
+  path: {
+    /**
+     * Host Id
+     */
+    host_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/inference-hosts/{host_id}/recording-compression/commands/{command_id}'
+}
+
+export type ReadRecordingCompressionCommandErrors = {
+  /**
+   * Authentication required or session invalid
+   */
+  401: ProblemDocument
+  /**
+   * Permission denied or CSRF token invalid
+   */
+  403: ProblemDocument
+  /**
+   * Device record not found
+   */
+  404: ProblemDocument
+  /**
+   * Device configuration conflict
+   */
+  409: ProblemDocument
+  /**
+   * Validation Error
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadRecordingCompressionCommandError =
+  ReadRecordingCompressionCommandErrors[keyof ReadRecordingCompressionCommandErrors]
+
+export type ReadRecordingCompressionCommandResponses = {
+  /**
+   * Successful Response
+   */
+  200: CompressionCommandView
+}
+
+export type ReadRecordingCompressionCommandResponse =
+  ReadRecordingCompressionCommandResponses[keyof ReadRecordingCompressionCommandResponses]
 
 export type SetInferenceHostStatusData = {
   body: HostStatus

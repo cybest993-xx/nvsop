@@ -450,8 +450,14 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
                 "WHERE table_name = 'evidence_evidence' AND column_name = 'review_state_known'"
             )
         ).scalar_one()
-    # 0075 增强命令在保留前序 DDM/VLM 训练与交权事实的同时追加新 owner 表。
-    assert version == "0075"
+    # #212 录制压缩在 0075，增强产物登记在 0076，历史状态都必须存在。
+    assert version == "0076"
+    assert {"compression_action", "compression_result"} <= _columns(
+        database_at_0023, "device_pending_command"
+    )
+    command_columns = _nullable_columns(database_at_0023, "device_pending_command")
+    assert command_columns["compression_action"] is True
+    assert command_columns["compression_result"] is True
     assert {"dataset_augmentation_command", "dataset_training_command"} <= _tables(database_at_0023)
     assert {
         "dataset_id",
@@ -463,6 +469,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
         "result_status",
         "result_manifest",
     } <= _columns(database_at_0023, "dataset_augmentation_command")
+    # #215：正常交权授予结果与既有引用保护、回收账本随 head 到位。
     assert {"new_grant_id", "granted_at", "granted_by"} <= _columns(
         database_at_0023, "execution_normal_handover"
     )
@@ -541,6 +548,10 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
     assert "source_object_key" in _columns(database_at_0023, "dataset_annotation_context")
     assert "dataset.dataset.edit" in _permission_codes(database_at_0023)
 
+    command.downgrade(configuration, "0073")
+    assert not {"compression_action", "compression_result"} & _columns(
+        database_at_0023, "device_pending_command"
+    )
     command.downgrade(configuration, "0025")
     # 0065-0067 的回滚须移除引用保护、回收账本与聚合归档。
     assert not {

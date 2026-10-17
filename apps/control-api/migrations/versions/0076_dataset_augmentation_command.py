@@ -1,15 +1,15 @@
 """dataset：增强真实产物与不可提前释放的派发意图。
 
-Revision ID: 0075
-Revises: 0074
+Revision ID: 0076
+Revises: 0075
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0075"
-down_revision = "0074"
+revision = "0076"
+down_revision = "0075"
 branch_labels = None
 depends_on = None
 

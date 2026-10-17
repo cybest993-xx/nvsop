@@ -40,6 +40,7 @@ import ConnectionTestControl from './ConnectionTestControl.vue'
 import ForceHandoverPanel from './ForceHandoverPanel.vue'
 import NormalHandoverPanel from './NormalHandoverPanel.vue'
 import PointManagement from './PointManagement.vue'
+import RecordingCompressionPanel from './RecordingCompressionPanel.vue'
 import StationRetentionPanel from './StationRetentionPanel.vue'
 import StationRuntimePanel from './StationRuntimePanel.vue'
 import StationTemplateConfiguration from './StationTemplateConfiguration.vue'
@@ -413,6 +414,11 @@ onMounted(load)
       :hosts="hosts"
     />
 
+    <RecordingCompressionPanel
+      v-for="key in mayViewHosts ? ['compression'] : []"
+      :key="key"
+      :hosts="hosts"
+    />
     <p v-if="failure" class="devices__failure" role="alert">{{ failure }}</p>
     <p v-if="loading" class="devices__loading">正在加载连接器…</p>
 

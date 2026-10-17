@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session as DatabaseSession
 
-from factory_sop.device.adapters.tables import PendingCommandRow
+from factory_sop.device.adapters.tables import InferenceHostRow, PendingCommandRow
 from factory_sop.device.errors import DeviceRefusalCode, DeviceRefusedError
 from factory_sop.device.model import (
     PendingCommand,
@@ -73,6 +73,8 @@ class PostgresPendingCommandRepository:
             "result_detail": row.result_detail,
             "failure_code": row.failure_code,
             "result_credentials_configured": row.result_credentials_configured,
+            "compression_action": row.compression_action,
+            "compression_result": row.compression_result,
             "completed_at": row.completed_at,
             "created_by": row.created_by,
             "created_at": row.created_at,
@@ -102,6 +104,23 @@ class PostgresPendingCommandRepository:
         lease_expires_at: datetime,
     ) -> PendingCommand | None:
         """在一个事务中回收过期领取并锁定该主机指定类型的最早待命令。"""
+        if command_type is PendingCommandType.CONTROL_RECORDING_COMPRESSION:
+            # 同一主机串行领取: 回报丢失/租约未到期时, 后继恢复不能越过旧暂停请求。
+            self._session.scalar(
+                select(InferenceHostRow.id).where(InferenceHostRow.id == host_id).with_for_update()
+            )
+            active = self._session.scalar(
+                select(PendingCommandRow.id)
+                .where(
+                    PendingCommandRow.host_id == host_id,
+                    PendingCommandRow.command_type == command_type,
+                    PendingCommandRow.status == PendingCommandStatus.CLAIMED,
+                    PendingCommandRow.lease_expires_at > claimed_at,
+                )
+                .limit(1)
+            )
+            if active is not None:
+                return None
         self._session.execute(
             update(PendingCommandRow)
             .where(
@@ -180,6 +199,7 @@ class PostgresPendingCommandRepository:
                     result_detail=completion.result_detail,
                     failure_code=completion.failure_code,
                     result_credentials_configured=completion.result_credentials_configured,
+                    compression_result=completion.compression_result,
                     completed_at=completion.completed_at,
                     updated_at=completion.completed_at,
                 )
@@ -223,4 +243,5 @@ def _same_completion(row: PendingCommandRow, completion: PendingCommandCompletio
         and row.result_detail == completion.result_detail
         and row.failure_code == completion.failure_code
         and row.result_credentials_configured == completion.result_credentials_configured
+        and row.compression_result == completion.compression_result
     )

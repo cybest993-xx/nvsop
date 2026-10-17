@@ -539,6 +539,95 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             finally:
                 off.close()
 
+    def test_recording_compression_worker_auto_yields_on_station_queue_backlog(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            identity = _fixture_host_identity(52)
+            private_key_file = directory / "host-private-key"
+            private_key_file.write_text(identity.private_key, encoding="utf-8")
+            camera = directory / "recordings" / "camera-a"
+            camera.mkdir(parents=True)
+            recording_segments(camera, time() - 3 * 3600, 1)
+
+            enabled = _local_config(directory, private_key_file)
+            media_cfg = _local_media(directory, enabled=True)
+            media_cfg["recording_compression_backlog_threshold"] = 2
+            media_cfg["recording_compression_backlog_recovery_threshold"] = 0
+            enabled["media"] = media_cfg
+            enabled["evidence"] = {
+                "evidence_directory": str(directory / "evidence"),
+                "ffprobe_binary": "/usr/bin/ffprobe",
+                "slice_timeout_seconds": 30.0,
+            }
+            enabled_path = directory / "edge-enabled.json"
+            enabled_path.write_text(json.dumps(enabled), encoding="utf-8")
+            with patch(
+                "edge_runtime.runtime.HttpConfigurationPuller.pull",
+                side_effect=ConfigurationPullError("center_unreachable", "center unavailable"),
+            ):
+                runtime = build_autonomous_runtime_from_file(enabled_path)
+            try:
+                worker = runtime.compression
+                self.assertIsNotNone(worker)
+                assert worker is not None
+                self.assertEqual(worker.status().state, "idle")
+
+                context = ReportContext(
+                    host_id="host-a",
+                    station_id="station-a",
+                    backends=(),
+                    template_version_id="tpl-v1",
+                    template_sha256="0" * 64,
+                    configuration_revision=1,
+                    configuration_sha256="0" * 64,
+                    configuration_json="{}",
+                )
+                owner = runtime._state.station("station-a", report_context=context)
+                owner.enqueue_observation(
+                    instance_id=1,
+                    source="external",
+                    signal="action_1",
+                    source_time=None,
+                    source_anchor=None,
+                    observed_at=time(),
+                    backend=None,
+                )
+                owner.enqueue_observation(
+                    instance_id=1,
+                    source="external",
+                    signal="action_2",
+                    source_time=None,
+                    source_anchor=None,
+                    observed_at=time(),
+                    backend=None,
+                )
+                status = {entry.name: entry for entry in runtime._state.queue_status()}
+                self.assertEqual(status["observation"].depth, 2)
+
+                summary = worker.drain()
+                self.assertEqual(summary.created, 0)
+                self.assertEqual(summary.replaced, 0)
+                self.assertEqual(worker.status().state, "paused")
+                self.assertEqual(worker.status().requested, "run")
+                self.assertIn(
+                    "auto-yield: judgment backlog in observation",
+                    worker.status().detail or "",
+                )
+
+                for obs in owner.pending_observation_reports():
+                    owner.mark_observation_reported(
+                        obs.queue_id, at=HostInstant(time()), acknowledged_at="2026-10-17T00:00:00Z"
+                    )
+                status = {entry.name: entry for entry in runtime._state.queue_status()}
+                self.assertEqual(status["observation"].depth, 0)
+
+                summary = worker.drain()
+                self.assertEqual((summary.created, summary.replaced, summary.failed), (1, 1, 0))
+                self.assertEqual(worker.status().state, "idle")
+                self.assertIsNone(worker.status().detail)
+            finally:
+                runtime.close()
+
     def test_expired_execution_lease_refuses_the_physical_write(self) -> None:
         loopback = self._loopback()
         bundle = replace(

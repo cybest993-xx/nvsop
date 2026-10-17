@@ -60,6 +60,9 @@ DEFAULT_RECORDING_COMPRESSION_CRF = 28
 # 默认关闭: 候选压缩文件与原件并存, 而校验后原子替换 (S048) 尚未实现; 开启前须按磁盘水位
 # 评估额外占用, 并按 P5 实测确定质量档。
 DEFAULT_RECORDING_COMPRESSION_ENABLED = False
+# 判定队列积压自动让路默认阈值 (S050): 当判定观测/报告队列深度达到此值时暂停压缩,
+# 避免与实时判定争用资源。
+DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +111,8 @@ class MediaRuntimeConfiguration:
     recording_compression_enabled: bool = DEFAULT_RECORDING_COMPRESSION_ENABLED
     recording_compression_crf: int = DEFAULT_RECORDING_COMPRESSION_CRF
     recording_compression_readrate: float | None = None
+    recording_compression_backlog_threshold: int = DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD
+    recording_compression_backlog_recovery_threshold: int | None = None
 
 
 class _Process(Protocol):
@@ -152,6 +157,8 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
             "recording_compression_enabled",
             "recording_compression_crf",
             "recording_compression_readrate",
+            "recording_compression_backlog_threshold",
+            "recording_compression_backlog_recovery_threshold",
         },
     )
     cameras = tuple(
@@ -194,6 +201,27 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
         if "recording_compression_crf" in config
         else DEFAULT_RECORDING_COMPRESSION_CRF
     )
+    backlog_threshold = (
+        _positive_integer(
+            config["recording_compression_backlog_threshold"],
+            "recording_compression_backlog_threshold",
+        )
+        if "recording_compression_backlog_threshold" in config
+        else DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD
+    )
+    backlog_recovery_threshold = (
+        _non_negative_integer(
+            config["recording_compression_backlog_recovery_threshold"],
+            "recording_compression_backlog_recovery_threshold",
+        )
+        if "recording_compression_backlog_recovery_threshold" in config
+        else None
+    )
+    if backlog_recovery_threshold is not None and backlog_recovery_threshold >= backlog_threshold:
+        raise ValueError(
+            "recording_compression_backlog_recovery_threshold must be strictly less than "
+            "recording_compression_backlog_threshold"
+        )
     allow_origins = tuple(
         _origin(item, "allow_origins item")
         for item in _array(config["allow_origins"], "allow_origins")
@@ -240,6 +268,8 @@ def load_media_runtime_configuration(value: object) -> MediaRuntimeConfiguration
             if "recording_compression_readrate" in config
             else None
         ),
+        recording_compression_backlog_threshold=backlog_threshold,
+        recording_compression_backlog_recovery_threshold=backlog_recovery_threshold,
     )
     return configuration
 
@@ -656,6 +686,23 @@ def _validate_configuration(configuration: MediaRuntimeConfiguration) -> None:
             configuration.recording_compression_readrate, "recording_compression_readrate"
         )
     _positive_integer(
+        configuration.recording_compression_backlog_threshold,
+        "recording_compression_backlog_threshold",
+    )
+    if configuration.recording_compression_backlog_recovery_threshold is not None:
+        _non_negative_integer(
+            configuration.recording_compression_backlog_recovery_threshold,
+            "recording_compression_backlog_recovery_threshold",
+        )
+        if (
+            configuration.recording_compression_backlog_recovery_threshold
+            >= configuration.recording_compression_backlog_threshold
+        ):
+            raise ValueError(
+                "recording_compression_backlog_recovery_threshold must be strictly less than "
+                "recording_compression_backlog_threshold"
+            )
+    _positive_integer(
         configuration.record_segment_duration_seconds, "record_segment_duration_seconds"
     )
     _non_negative_integer(
@@ -1016,6 +1063,7 @@ def _stream_path(value: str) -> None:
 
 __all__ = [
     "DEFAULT_RECORDING_COMPRESSION_AGE_SECONDS",
+    "DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD",
     "DEFAULT_RECORDING_COMPRESSION_CRF",
     "DEFAULT_RECORDING_COMPRESSION_ENABLED",
     "LocalMediaCamera",

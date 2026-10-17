@@ -21,6 +21,10 @@ _OPTIONAL_MEDIA_KEYS = frozenset(
         "recording_compression_age_seconds",
         "recording_compression_enabled",
         "recording_compression_crf",
+        "recording_compression_readrate",
+        # S050 判定积压自动让路阈值: 本机运维可能已按盘/负载调过, 不能被中心导出抹回默认。
+        "recording_compression_backlog_threshold",
+        "recording_compression_backlog_recovery_threshold",
     }
 )
 _STATIC_MEDIA_KEYS = (

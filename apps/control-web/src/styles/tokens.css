@@ -22,6 +22,7 @@
      a change to one of them carries through, rather than being a second literal to keep in sync. */
   --color-primary-subtle: color-mix(in srgb, var(--color-primary) 12%, #fff);
   --color-success-subtle: color-mix(in srgb, var(--color-success) 12%, #fff);
+  --color-danger-subtle: color-mix(in srgb, var(--color-danger) 12%, #fff);
   --color-warning-subtle: color-mix(in srgb, var(--color-warning) 18%, #fff);
   --color-warning-strong: color-mix(in srgb, var(--color-warning) 80%, #000);
 

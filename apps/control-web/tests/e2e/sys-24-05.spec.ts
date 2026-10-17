@@ -295,7 +295,7 @@ test('SYS-24-05 — an operator manages a connector without secrets and sees the
 
   await page.getByRole('button', { name: '新建连接器' }).click()
   // Naive UI's dialogs carry role=dialog but no accessible name (the title is rendered text, not
-// wired to aria-labelledby), so the dialog is located by role and identified by its content.
+  // wired to aria-labelledby), so the dialog is located by role and identified by its content.
   const dialog = page.getByRole('dialog')
   await dialog.getByLabel('名称').fill('新连接器')
   await dialog.getByLabel('地址').fill('10.0.8.22')

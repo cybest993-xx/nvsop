@@ -11,16 +11,17 @@
  * object the way Element Plus did, so a component that shows a toast has to render inside this
  * provider; a test mounting such a component needs one above it too.
  */
-import { NConfigProvider, NMessageProvider, dateZhCN, zhCN } from 'naive-ui'
+import { NConfigProvider, NMessageProvider } from 'naive-ui'
 
+import { appDateLocale, appLocale } from '@/naive-config'
 import { themeOverrides } from '@/styles/naive-theme'
 </script>
 
 <template>
   <NConfigProvider
     abstract
-    :locale="zhCN"
-    :date-locale="dateZhCN"
+    :locale="appLocale"
+    :date-locale="appDateLocale"
     :theme-overrides="themeOverrides"
   >
     <NMessageProvider>

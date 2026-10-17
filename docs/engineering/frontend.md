@@ -92,7 +92,7 @@ Q32 sets the floor: keyboard operable, every field labelled, errors announced, a
 
 Work the branch that matches the change. Each branch ends on a checkable bound.
 
-**Adding a page.** Register the route with its `requires` permissions and its title. Compose the page from `PageHeader`, `Panel`, `Toolbar`, `DataTable` and the state components rather than writing the equivalents. Take every colour and size from tokens. Finish when the page renders at both viewports with no document scroll and no horizontal overflow, every field has an accessible name, and the views and markup tests cover it.
+**Adding a page.** Register the route with its `requires` permissions and its title. Compose the page from `PageHeader`, `Panel`, `Toolbar`, `DataTable` and the state components rather than writing the equivalents (these shared display components land with the visual foundation, #523; until then a page composes from `FieldRow` and its own sections). Take every colour and size from tokens. Finish when the page renders at both viewports with no document scroll and no horizontal overflow, every field has an accessible name, and the views and markup tests cover it.
 
 **Adding a shared component.** Confirm two real callers exist. Give it a slot-based interface rather than props that mirror one caller's shape. Give every icon-only control an accessible name. Finish when both callers render through it and no caller keeps its own copy.
 
@@ -108,8 +108,8 @@ Some of the above is enforced by machines; the rest is enforced by review, and t
 
 | Rule | Enforced by |
 |---|---|
-| Colours and font sizes come from tokens | `scripts/check_repo_policy.py` |
-| Theme overrides live only in `naive-theme.ts` | `scripts/check_repo_policy.py` |
+| Colours and font sizes come from tokens | Review (mechanical gate planned, #524) |
+| Theme overrides live only in `naive-theme.ts` | Review (mechanical gate planned, #524) |
 | Every form control has an accessible name | Integration test |
 | The document does not scroll; nothing overflows horizontally | Playwright, both viewports |
 | Text contrast reaches AA | Playwright with axe-core |

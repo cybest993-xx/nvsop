@@ -561,8 +561,8 @@ async function submitEditor(): Promise<void> {
     grid-template-columns: 2rem 1fr;
   }
 
-  .template-management__step-row .el-input:nth-child(3),
-  .template-management__step-row .el-button {
+  .template-management__step-row .n-input:nth-child(3),
+  .template-management__step-row .n-button {
     grid-column: 2;
   }
 

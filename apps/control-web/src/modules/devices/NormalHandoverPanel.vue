@@ -215,7 +215,7 @@ onUnmounted(() => closeStream?.())
   align-items: end;
   gap: 1rem;
 }
-.normal-handover :deep(.el-form-item) {
+.normal-handover :deep(.n-form-item) {
   margin-bottom: 0;
 }
 .normal-handover__lookup {
@@ -225,7 +225,7 @@ onUnmounted(() => closeStream?.())
   gap: 0.75rem;
   margin-block: 1rem;
 }
-.normal-handover__lookup .el-form-item {
+.normal-handover__lookup .n-form-item {
   flex: 1;
   min-width: 16rem;
 }

@@ -1,8 +1,9 @@
-import { NConfigProvider, NMessageProvider, dateZhCN, zhCN } from 'naive-ui'
+import { NConfigProvider, NMessageProvider } from 'naive-ui'
 import { mount } from '@vue/test-utils'
 import type { ComponentMountingOptions, VueWrapper } from '@vue/test-utils'
 import { defineComponent, h, type Component } from 'vue'
 
+import { appDateLocale, appLocale } from '@/naive-config'
 import { themeOverrides } from '@/styles/naive-theme'
 
 /**
@@ -44,8 +45,8 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
  * 生产树里的两个提供者（`App.vue`）在这里必须以真实组件出现，不能注入替身：
  * `naive-ui` 不导出 message 的注入键，而 `useMessage()` 在提供者之外直接抛错；
  * 多个套件断言真实 toast 文本（经 Teleport 落到 `document.body`），只有真实
- * `NMessageProvider` 能产生。提供者的配置（locale / dateLocale / themeOverrides）
- * 与 `App.vue` 保持一致：快照断言的是生产里会出现的文本。
+ * `NMessageProvider` 能产生。提供者的配置与 `App.vue` 同源：locale 来自
+ * `@/naive-config`，主题覆盖来自 `@/styles/naive-theme`——快照断言的是生产里会出现的文本。
  *
  * `NConfigProvider` 用 `abstract`，不引入包裹元素，挂载结果的 DOM 就是组件自身，
  * 既有 `wrapper.find(...)` / `wrapper.html()` 断言不受影响；需要组件实例的断言
@@ -68,7 +69,7 @@ export function mountWithNaive<C extends Component>(
     render: () =>
       h(
         NConfigProvider,
-        { abstract: true, locale: zhCN, dateLocale: dateZhCN, themeOverrides },
+        { abstract: true, locale: appLocale, dateLocale: appDateLocale, themeOverrides },
         {
           default: () =>
             h(NMessageProvider, null, {

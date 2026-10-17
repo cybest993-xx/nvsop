@@ -33,6 +33,6 @@
 - `apps/control-web/src/` 的 19 个组件文件全量迁移；`--el-*` 变量在切换后全部消失，所有 `<style scoped>` 需要重写。这是"统一视觉"工作量的主体，不是附带成本。
 - `tests/integration/__snapshots__/markup.spec.ts.snap` 需要整体重定。该快照的用途是捕捉重构中丢失的 `aria-*`、标题层级与控件语义，因此必须逐条复核而非直接更新。
 - 若干集成测试与 e2e 断言 Element Plus 的 CSS 类名（`.el-tabs__item`、`.el-checkbox`、`.el-tag`、`.el-select`），需改为角色/语义查询。这同时消除了对样式实现的耦合。
-- 新增运行时依赖 `naive-ui` 与 `lucide-vue-next`，与锁文件同批落地。
+- 新增运行时依赖 `naive-ui`，与锁文件同批落地；图标库 `lucide-vue-next` 随首个使用图标的界面（视觉落地工作，见 #523）与锁文件同批加入，本迁移不提前引入未使用的依赖。
 - 组件库不再由本 ADR 之外的文档重复声明：具体版本由 `apps/control-web/package.json` 与 `pnpm-lock.yaml` 拥有。
 - 本决定不改变 §5.4 的 Web 行为与可访问性基线，也不改变中心与边缘的职责划分、媒体所有权或任何后端契约。

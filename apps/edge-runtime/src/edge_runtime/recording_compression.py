@@ -392,8 +392,8 @@ class RecordingCompressionWorker:
     def _poll_backlog(self, *, force: bool = False) -> None:
         if self._backlog_check is None:
             return
-        # 积压信号读的是判定路径共用的 SQLite 连接: 按秒级节流, 不在编码轮询里密集抢占判定写锁。
-        # 一轮压缩开始的 drain 不受节流影响: 它本来就按压缩间隔触发。
+        # 积压信号读的是判定写路径同一把 LocalState 锁: 按秒级节流把等待压到可忽略的频率,
+        # 只读不写、不反压判定。一轮压缩开始的 drain 不受节流影响: 它本来就按压缩间隔触发。
         current = monotonic()
         if not force and current < self._next_backlog_poll:
             return

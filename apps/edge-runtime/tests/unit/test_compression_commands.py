@@ -57,12 +57,18 @@ class FakeWorker:
     readrate = 0.25
 
     def __init__(
-        self, state: str = "idle", *, transient: bool = False, detail: str | None = None
+        self,
+        state: str = "idle",
+        *,
+        transient: bool = False,
+        detail: str | None = None,
+        stuck: bool = False,
     ) -> None:
         self.state = state
         self.requested = "run"
         self.calls: list[str] = []
         self._transient = transient
+        self._stuck = stuck
         self.detail = detail
 
     def status(self) -> CompressionStatus:
@@ -72,18 +78,24 @@ class FakeWorker:
 
     def pause(self) -> CompressionStatus:
         self.calls.append("pause")
+        if self._stuck:
+            return self.status()
         self.requested = "pause"
         self.state = "pausing" if self._transient else "paused"
         return self.status()
 
     def resume(self) -> CompressionStatus:
         self.calls.append("resume")
+        if self._stuck:
+            return self.status()
         self.requested = "run"
         self.state = "resuming" if self._transient else "idle"
         return self.status()
 
     def abort(self) -> CompressionStatus:
         self.calls.append("abort")
+        if self._stuck:
+            return self.status()
         self.requested = "abort"
         self.state = "aborting" if self._transient else "aborted"
         return self.status()
@@ -156,6 +168,21 @@ class CompressionCommandLoopTests(unittest.TestCase):
         assert body["state"] == "pausing"
         assert body["failure_code"] == "control_unconfirmed"
 
+    def test_unconfirmed_report_keeps_the_yield_reason_visible(self) -> None:
+        """未确认时仍要保留本机观测原因, 否则运维看不到是判定积压让路而不是故障。"""
+        worker = FakeWorker(
+            "paused", detail="auto-yield: judgment backlog in observation", stuck=True
+        )
+        loop, client = self.loop(worker)
+        client.lease = _claim("resume", lease_expires_at=1.0)
+        client.reports = [200]
+
+        assert loop.run_once() is True
+        _, body, _ = client.posts[0]
+        assert body["failure_code"] == "control_unconfirmed"
+        assert worker.calls == ["resume"]
+        assert body["detail"].endswith("auto-yield: judgment backlog in observation")
+
     def test_absent_worker_reports_unavailable_instead_of_silence(self) -> None:
         """未启用压缩的本机也要给出可诊断的回报, 不留待领取命令。"""
         loop, client = self.loop(None)
@@ -169,7 +196,9 @@ class CompressionCommandLoopTests(unittest.TestCase):
 
     def test_inspect_reports_auto_yield_reason_through_the_existing_detail_field(self) -> None:
         """判定积压让路的原因必须能从已有命令观测读到, 不需要新增契约字段。"""
-        worker = FakeWorker("paused", detail="auto-yield: judgment backlog in observation")
+        worker = FakeWorker(
+            "paused", detail="auto-yield: judgment backlog in observation", stuck=True
+        )
         loop, client = self.loop(worker)
         client.lease = _claim("inspect", lease_expires_at=1.0)
         client.reports = [200]

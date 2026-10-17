@@ -54,6 +54,8 @@ class CleanupTaskTest(unittest.TestCase):
             'if test -f "$GH_CALLS"; then count=$(cat "$GH_CALLS"); fi\n'
             "printf '%s\\n' $((count + 1)) > \"$GH_CALLS\"\n"
             'if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then\n'
+            '  if [ "$4" != "--squash" ] || [ "$5" != "--match-head-commit" ] || '
+            '[ "$6" != "$GH_EXPECT_HEAD" ]; then exit 9; fi\n'
             '  if [ "$GH_MERGE_FAIL" = "1" ]; then exit 7; fi\n'
             '  if [ -n "$GH_MERGED_MARKER" ]; then : > "$GH_MERGED_MARKER"; fi\n'
             "  exit 0\n"
@@ -106,6 +108,7 @@ class CleanupTaskTest(unittest.TestCase):
         *,
         pr_branch: str | None = None,
         merge_fails: bool = False,
+        cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         payload = {
             "state": "MERGED",
@@ -123,11 +126,12 @@ class CleanupTaskTest(unittest.TestCase):
                 "GH_OPEN_PAYLOAD": json.dumps(open_payload),
                 "GH_MERGED_MARKER": str(self.merged_marker),
                 "GH_MERGE_FAIL": "1" if merge_fails else "0",
+                "GH_EXPECT_HEAD": candidate,
             }
         )
         return subprocess.run(
             ["make", "task-merge", "PR=311", f"BRANCH={branch}", f"CANDIDATE={candidate}"],
-            cwd=self.repo,
+            cwd=cwd or self.repo,
             env=env,
             capture_output=True,
             text=True,
@@ -423,6 +427,21 @@ class CleanupTaskTest(unittest.TestCase):
         self.assertFalse(self.merged_marker.exists(), result.stderr)
         self.assert_branch_exists(real_branch)
         self.assert_branch_exists(wrong_branch)
+        self.assertTrue(task.exists())
+
+    def test_task_merge_rejects_secondary_main_before_remote_merge(self) -> None:
+        self.install_task_merge_entrypoint()
+        branch = "agent/a/demo"
+        candidate, merge_commit, task = self.make_merged_task(branch)
+        self.git("switch", "--quiet", "-c", "agent/a/primary-other")
+        secondary_main = self.root / "secondary-main"
+        self.git("worktree", "add", "--quiet", str(secondary_main), "main")
+
+        result = self.run_make_merge(branch, candidate, merge_commit, cwd=secondary_main)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(self.merged_marker.exists(), result.stderr)
+        self.assert_branch_exists(branch)
         self.assertTrue(task.exists())
 
     def test_task_merge_rejects_dirty_task_before_remote_merge(self) -> None:

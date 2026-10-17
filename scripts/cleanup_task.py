@@ -371,6 +371,8 @@ def remove_local_target(target: CleanupTarget) -> None:
 
 def preflight_task_merge(pr: int, branch: str, candidate: str) -> None:
     candidate = parse_object_id(candidate, "--candidate")
+    if current_worktree() != canonical_path(read_worktrees()[0].path):
+        raise CleanupTaskError("task-merge requires the primary worktree")
     target = verify_local_target(branch, check_ignored=False)
     if target.task_tip != candidate:
         raise CleanupTaskError("local branch tip does not match --candidate")

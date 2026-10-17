@@ -184,6 +184,10 @@ class Settings(BaseSettings):
             )
         if self.augmentation_backend_url is not None:
             augmentation_url = urlsplit(self.augmentation_backend_url)
+            try:
+                augmentation_port = augmentation_url.port
+            except ValueError as error:
+                raise ValueError("augmentation_backend_url has an invalid port") from error
             if (
                 augmentation_url.scheme not in {"http", "https"}
                 or not augmentation_url.hostname
@@ -191,7 +195,7 @@ class Settings(BaseSettings):
                 or augmentation_url.password is not None
                 or augmentation_url.query
                 or augmentation_url.fragment
-                or (augmentation_url.port is not None and not 1 <= augmentation_url.port <= 65535)
+                or (augmentation_port is not None and not 1 <= augmentation_port <= 65535)
             ):
                 raise ValueError(
                     "augmentation_backend_url must be an HTTP(S) URL without credentials"

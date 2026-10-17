@@ -180,17 +180,18 @@ class PostgresAugmentationExecutor:
         # completed 只证明基座结束，真实文件与中心登记仍需分别完成。
         try:
             files = self._volume.prepare_result(command)
-            candidate = self._save_fact(
-                command,
-                replace(
+            if "files" not in command.result_manifest:
+                candidate = self._save_fact(
                     command,
-                    result_manifest={**command.result_manifest, "files": files},
-                    result_failure_code=None,
-                ),
-            )
-            if candidate is None:
-                return _PENDING
-            command = candidate
+                    replace(
+                        command,
+                        result_manifest={**command.result_manifest, "files": files},
+                        result_failure_code=None,
+                    ),
+                )
+                if candidate is None:
+                    return _PENDING
+                command = candidate
             self._volume.copy_result(command, files, self._storage())
         except Exception as error:
             self._diagnostic(command, "AUGMENTATION_REGISTRATION_FAILED", error, registration=True)

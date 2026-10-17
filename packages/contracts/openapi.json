@@ -1030,7 +1030,7 @@
         "type": "string"
       },
       "AugmentationView": {
-        "description": "分别返回受理/派发、基座观测和真实产物登记事实。",
+        "description": "公开状态与来源摘要；内部冻结载荷、共享卷清单和对象键留在 dataset。",
         "properties": {
           "annotation_execution_id": {
             "format": "uuid",
@@ -1048,10 +1048,27 @@
             ],
             "title": "Base Augmentation Id"
           },
-          "base_observation": {
-            "additionalProperties": true,
-            "title": "Base Observation",
-            "type": "object"
+          "base_progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Progress"
+          },
+          "base_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Status"
           },
           "cancelled_at": {
             "anyOf": [
@@ -1124,10 +1141,9 @@
             "title": "Id",
             "type": "string"
           },
-          "input_snapshot": {
-            "additionalProperties": true,
-            "title": "Input Snapshot",
-            "type": "object"
+          "input_source": {
+            "title": "Input Source",
+            "type": "string"
           },
           "job_id": {
             "anyOf": [
@@ -1141,10 +1157,6 @@
             ],
             "title": "Job Id"
           },
-          "label_data_id": {
-            "title": "Label Data Id",
-            "type": "string"
-          },
           "last_observed_at": {
             "anyOf": [
               {
@@ -1157,6 +1169,10 @@
             ],
             "title": "Last Observed At"
           },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          },
           "result_failure_code": {
             "anyOf": [
               {
@@ -1168,10 +1184,9 @@
             ],
             "title": "Result Failure Code"
           },
-          "result_manifest": {
-            "additionalProperties": true,
-            "title": "Result Manifest",
-            "type": "object"
+          "result_file_count": {
+            "title": "Result File Count",
+            "type": "integer"
           },
           "result_status": {
             "enum": [
@@ -1180,6 +1195,10 @@
             ],
             "title": "Result Status",
             "type": "string"
+          },
+          "result_total_bytes": {
+            "title": "Result Total Bytes",
+            "type": "integer"
           },
           "status": {
             "$ref": "#/components/schemas/AugmentationStatus"
@@ -1194,18 +1213,20 @@
           "id",
           "dataset_id",
           "annotation_execution_id",
-          "label_data_id",
           "job_id",
           "frame_drop_iterations",
-          "input_snapshot",
+          "input_source",
+          "original_filename",
           "status",
           "dispatched_at",
           "base_augmentation_id",
-          "base_observation",
+          "base_status",
+          "base_progress",
           "last_observed_at",
           "failure_code",
           "result_status",
-          "result_manifest",
+          "result_file_count",
+          "result_total_bytes",
           "result_failure_code",
           "cancelled_by",
           "cancelled_at",

@@ -19,12 +19,14 @@ from sqlalchemy import Engine
 from test_ddm_training_command import _caller, _seed_ddm_rows
 
 from factory_sop.auth.api import Permission
+from factory_sop.dataset.adapters.augmentation import AugmentationVolume
 from factory_sop.dataset.adapters.augmentation_execution import PostgresAugmentationExecutor
 from factory_sop.dataset.adapters.media import FfprobeMediaProbe
 from factory_sop.dataset.adapters.repository import PostgresDatasetRepository
 from factory_sop.dataset.adapters.storage import LocalFileObjectStorage
 from factory_sop.dataset.errors import DatasetRefusalCode, DatasetRefusedError
 from factory_sop.dataset.model import AugmentationCommand
+from factory_sop.dataset.storage import ObjectStorage
 from factory_sop.dataset.usecases.augmentation import cancel_augmentation, request_augmentation
 from factory_sop.job.adapters.repository import PostgresJobRepository
 from factory_sop.job.adapters.worker import augment_dataset_job
@@ -248,6 +250,54 @@ def _cancel(engine: Engine, command: AugmentationCommand) -> AugmentationCommand
             now=datetime.now(UTC),
             datasets=PostgresDatasetRepository(session),
         )
+
+
+def test_failed_result_copy_reuses_frozen_candidate_keys_without_orphaning_files(
+    engine: Engine,
+    tmp_path: Path,
+    real_video_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id, execution_id = _seed(engine)
+    command = _request(engine, dataset_id, execution_id, "copy-failed-once")
+    _input(tmp_path)
+    with AugmentationServer() as server:
+        bound = _run(engine, tmp_path, server, command)
+        assert bound.base_augmentation_id is not None
+        output = tmp_path / bound.base_augmentation_id
+        output.mkdir()
+        (output / "clip.mp4").write_bytes(real_video_bytes)
+        (output / "bcq.json").write_text('[{"video": "clip.mp4"}]')
+        server.status = "completed"
+        original_copy = AugmentationVolume.copy_result
+        copies = 0
+
+        def fail_once_after_copy(
+            self: AugmentationVolume,
+            target: AugmentationCommand,
+            files: list[dict[str, Any]],
+            storage: ObjectStorage,
+        ) -> None:
+            nonlocal copies
+            original_copy(self, target, files, storage)
+            copies += 1
+            if copies == 1:
+                raise OSError("result copy acknowledgement lost")
+
+        monkeypatch.setattr(AugmentationVolume, "copy_result", fail_once_after_copy)
+        unregistered = _run(engine, tmp_path, server, command)
+        assert unregistered.status.value == "bound"
+        assert unregistered.result_status == "not_registered"
+        frozen = unregistered.result_manifest["files"]
+        assert len(frozen) == 2
+        completed = _run(engine, tmp_path, server, command)
+        assert completed.status.value == "completed"
+        assert completed.result_manifest["files"] == frozen
+        assert copies == 2
+        root = tmp_path / "registered" / "augmentation-results" / str(command.id)
+        files = [path for path in root.rglob("*") if path.is_file()]
+        assert len(files) == len(frozen)
+        assert len(server.starts) == 1
 
 
 def test_lost_response_blocks_new_commands_across_worker_restarts(

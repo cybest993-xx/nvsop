@@ -521,6 +521,16 @@ ROUTES = [
     ),
     Target(
         "POST",
+        "/training-datasets/{dataset_id}/augmentation-commands",
+        {"annotation_execution_id": "{attempt_id}", "frame_drop_iterations": 1},
+        headers={"Idempotency-Key": "authz-augmentation"},
+    ),
+    Target(
+        "POST",
+        "/training-datasets/{dataset_id}/augmentation-commands/{command_id}/cancel",
+    ),
+    Target(
+        "POST",
         "/training-datasets/{dataset_id}/vlm-training-commands",
         {"usage_check_id": "019937d8-0d10-7b31-8d2d-4e60c8f4f307"},
         headers={"Idempotency-Key": "authz-vlm"},

@@ -870,6 +870,7 @@ class AugmentationCommandRow(Table):
 
     __tablename__ = "dataset_augmentation_command"
     __table_args__ = (
+        Index("ix_dataset_augmentation_command_dataset_id", "dataset_id"),
         UniqueConstraint("dataset_id", "idempotency_key", name="uq_augmentation_request"),
         UniqueConstraint("backend_target", "base_augmentation_id", name="uq_augmentation_base"),
         Index(
@@ -882,7 +883,9 @@ class AugmentationCommandRow(Table):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
-    dataset_id: Mapped[UUID] = mapped_column(ForeignKey("dataset_training_dataset.id"))
+    dataset_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dataset_training_dataset.id", ondelete="CASCADE")
+    )
     annotation_execution_id: Mapped[UUID] = mapped_column(
         ForeignKey("dataset_annotation_execution.id")
     )

@@ -73,9 +73,9 @@ from factory_sop.dataset.usecases.usage import (
 )
 from factory_sop.dataset.usecases.vlm_command import request_vlm_training_command
 from factory_sop.job.adapters.dispatcher import ArqJobDispatcher
-from factory_sop.job.adapters.repository import PostgresUsageJobQueue
-from factory_sop.job.adapters.worker import dispatch_pending_jobs
-from factory_sop.job.api import JobType
+from factory_sop.job.adapters.repository import PostgresJobRepository, PostgresUsageJobQueue
+from factory_sop.job.adapters.worker import dispatch_pending_jobs, dispatch_vlm_training_job
+from factory_sop.job.api import JobStatus, JobType
 from factory_sop.persistence import session_factory
 from factory_sop.settings import Settings
 
@@ -397,6 +397,41 @@ def test_vlm_command_is_held_until_the_vlm_backend_is_configured(
         )
         asyncio.run(dispatch_pending_jobs(configured))
         assert redis_client.keys(f"arq:job:{submitted.job.id}:*")
+
+
+def test_vlm_pending_worker_poll_releases_lease_for_next_dispatch(
+    engine: Engine, tmp_path: Path, dataset_storage_root: Path, vlm_dataset: tuple[UUID, UUID]
+) -> None:
+    """VLM 未完成时释放 worker 领取租约，在正常扫描中再查询同一基座任务。"""
+    dataset_id, check_id = vlm_dataset
+    submitted = _submit(
+        engine,
+        idempotency_key="vlm-worker-pending",
+        selection=VlmInputSelection(dataset_id=dataset_id, usage_check_id=check_id),
+    )
+    with VlmHttpServer() as server:
+        ctx = _worker_ctx(
+            engine,
+            _settings(
+                engine,
+                tmp_path=tmp_path,
+                dataset_storage_root=dataset_storage_root,
+                server=server,
+            ),
+        )
+        for attempt in range(2):
+            asyncio.run(dispatch_vlm_training_job(ctx, str(submitted.job.id)))
+            with session_factory(engine)() as session:
+                jobs = PostgresJobRepository(session)
+                stored = jobs.by_id(submitted.job.id)
+                assert stored is not None
+                assert stored.status == JobStatus.PENDING.value, attempt
+                pending = jobs.pending(
+                    limit=100,
+                    configured_training_types=frozenset({JobType.DATASET_VLM_TRAINING}),
+                )
+                assert submitted.job.id in {job.id for job in pending}
+        assert server.starts == [f"vlm-{submitted.command.id}"]
 
 
 def test_vlm_start_binds_real_job_and_redelivery_only_polls_original(

@@ -123,7 +123,7 @@ def test_sys_84_authorized_augmentation_registration_and_history(
         server.rows[identity].status = "completed"
         asyncio.run(augment_dataset_job(ctx, command["job_id"]))
         missing = client.get(command_path).json()
-        assert missing["base_observation"]["status"] == "completed"
+        assert missing["base_status"] == "completed"
         assert missing["result_status"] == "not_registered"
         stage = media_root / identity / "bcq"
         (stage / "videos").mkdir(parents=True)
@@ -133,15 +133,30 @@ def test_sys_84_authorized_augmentation_registration_and_history(
         complete = client.get(command_path).json()
         assert complete["status"] == "completed"
         assert complete["result_status"] == "registered"
-        assert complete["input_snapshot"]["source"] == "integration"
-        assert complete["input_snapshot"]["annotation_execution_id"] == str(execution_id)
+        assert complete["input_source"] == "integration"
+        assert complete["annotation_execution_id"] == str(execution_id)
+        assert complete["result_file_count"] == 2
+        assert complete["result_total_bytes"] > len(real_video_bytes)
+        assert not {"input_snapshot", "base_observation", "result_manifest", "label_data_id"} & set(
+            complete
+        )
         assert client.get(f"/api/v1/jobs/{command['job_id']}").json()["status"] == "succeeded"
         assert client.get(path).json()["items"][0]["id"] == command["id"]
         artifact_executor(settings, factory).cleanup_candidates()
-        for entry in complete["result_manifest"]["files"]:
-            assert storage.stat(object_key=entry["object_key"]).size == entry["size"]
+        result_files = list(
+            (
+                Path(deployment_environ["SOP_DATASET_STORAGE_ROOT"])
+                / "augmentation-results"
+                / command["id"]
+            ).rglob("*")
+        )
+        assert {file.name for file in result_files if file.is_file()} == {"clip.mp4", "bcq.json"}
+        assert (
+            next(file for file in result_files if file.name == "clip.mp4").read_bytes()
+            == real_video_bytes
+        )
         assert (stage / "videos/clip.mp4").read_bytes() == real_video_bytes
-        assert client.get(command_path).json()["result_manifest"] == complete["result_manifest"]
+        assert client.get(command_path).json() == complete
         pending = client.post(
             path, json=body, headers={**headers, "Idempotency-Key": "cancel-me"}
         ).json()

@@ -185,6 +185,14 @@ class AugmentationVolume:
                 video_count += 1
         if not json_count or not video_count:
             raise ValueError("增强产物缺少记录或关联媒体")
+        # 数据库已冻结的候选键在复制失败/发布权丢失后仍由下一 worker 接续，
+        # 不为同一未登记结果每次生成一批无人可追溯的新对象。
+        stored = command.result_manifest.get("files")
+        if stored is not None:
+            expected = [{key: entry[key] for key in ("path", "sha256", "size")} for entry in stored]
+            if files != expected:
+                raise ValueError("待登记增强产物与已冻结候选清单不一致")
+            return [dict(entry) for entry in stored]
         generation = uuid4().hex
         return [
             {

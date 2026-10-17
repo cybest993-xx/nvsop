@@ -495,14 +495,14 @@ class PostgresJobRepository:
         return result.rowcount == 1
 
     def defer_training_poll(
-        self, *, job_id: UUID, expected_updated_at: datetime, now: datetime
+        self, *, job_id: UUID, expected_updated_at: datetime, now: datetime, job_type: JobType
     ) -> bool:
         """原任务观测未终结：归还当前租约，下一 outbox 扫描只查询同一命令。"""
         return self.defer_command_poll(
             job_id=job_id,
             expected_updated_at=expected_updated_at,
             now=now,
-            job_type=JobType.DATASET_DDM_TRAINING,
+            job_type=job_type,
         )
 
     def defer_command_poll(

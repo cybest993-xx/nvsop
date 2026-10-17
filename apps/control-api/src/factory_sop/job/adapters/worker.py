@@ -862,6 +862,7 @@ def _dispatch_training_job(
                 job_id=running.id,
                 expected_updated_at=running.updated_at,
                 now=datetime.now(UTC),
+                job_type=job_type,
             ):
                 session.rollback()
                 return
@@ -924,12 +925,14 @@ def _generate_dataset_artifact_job(
         and not fence.cancelled
     ):
         with factory() as session:
-            PostgresJobRepository(session).defer_command_poll(
+            if not PostgresJobRepository(session).defer_command_poll(
                 job_id=running.id,
                 expected_updated_at=running.updated_at,
                 now=datetime.now(UTC),
                 job_type=running.job_type,
-            )
+            ):
+                session.rollback()
+                return
             _commit_if_active(session, fence)
 
 

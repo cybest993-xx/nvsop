@@ -285,6 +285,19 @@ class FakeDatasets:
     def artifact_by_id(self, artifact_id: UUID) -> DatasetArtifact | None:
         return self.artifacts.get(artifact_id)
 
+    def augmentation_by_key(self, dataset_id: UUID, key: str) -> None:
+        del dataset_id, key
+        return None
+
+    def augmentation_by_id(self, command_id: UUID) -> None:
+        del command_id
+        return None
+
+    def cancel_pending_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> None:
+        del dataset_id, command_id, actor_id, now
+
     def training_command_by_id(self, command_id: UUID) -> TrainingCommand | None:
         return self.ddm_commands.get(command_id)
 

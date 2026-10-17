@@ -677,7 +677,7 @@ export type AugmentationStatus =
 /**
  * AugmentationView
  *
- * 分别返回受理/派发、基座观测和真实产物登记事实。
+ * 公开状态与来源摘要；内部冻结载荷、共享卷清单和对象键留在 dataset。
  */
 export type AugmentationView = {
   /**
@@ -689,11 +689,13 @@ export type AugmentationView = {
    */
   base_augmentation_id: string | null
   /**
-   * Base Observation
+   * Base Progress
    */
-  base_observation: {
-    [key: string]: unknown
-  }
+  base_progress: number | null
+  /**
+   * Base Status
+   */
+  base_status: string | null
   /**
    * Cancelled At
    */
@@ -731,37 +733,37 @@ export type AugmentationView = {
    */
   id: string
   /**
-   * Input Snapshot
+   * Input Source
    */
-  input_snapshot: {
-    [key: string]: unknown
-  }
+  input_source: string
   /**
    * Job Id
    */
   job_id: string | null
   /**
-   * Label Data Id
-   */
-  label_data_id: string
-  /**
    * Last Observed At
    */
   last_observed_at: string | null
+  /**
+   * Original Filename
+   */
+  original_filename: string
   /**
    * Result Failure Code
    */
   result_failure_code: string | null
   /**
-   * Result Manifest
+   * Result File Count
    */
-  result_manifest: {
-    [key: string]: unknown
-  }
+  result_file_count: number
   /**
    * Result Status
    */
   result_status: 'not_registered' | 'registered'
+  /**
+   * Result Total Bytes
+   */
+  result_total_bytes: number
   status: AugmentationStatus
   /**
    * Updated At

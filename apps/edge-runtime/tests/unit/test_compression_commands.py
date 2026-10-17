@@ -181,7 +181,7 @@ class CompressionCommandLoopTests(unittest.TestCase):
         _, body, _ = client.posts[0]
         assert body["failure_code"] == "control_unconfirmed"
         assert worker.calls == ["resume"]
-        assert body["detail"].endswith("auto-yield: judgment backlog in observation")
+        assert str(body["detail"]).endswith("auto-yield: judgment backlog in observation")
 
     def test_absent_worker_reports_unavailable_instead_of_silence(self) -> None:
         """未启用压缩的本机也要给出可诊断的回报, 不留待领取命令。"""

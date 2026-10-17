@@ -612,6 +612,8 @@ class PendingCommandRow(Table):
             create_type=False,
         )
     )
+    compression_action: Mapped[str | None] = mapped_column(String(16))
+    compression_result: Mapped[dict[str, object] | None] = mapped_column(JSONB())
     result_detail: Mapped[str | None] = mapped_column(String(255))
     failure_code: Mapped[str | None] = mapped_column(String(64))
     result_credentials_configured: Mapped[bool | None] = mapped_column(Boolean())
@@ -638,6 +640,8 @@ class PendingCommandRow(Table):
             failure_code=self.failure_code,
             completed_at=self.completed_at,
             result_credentials_configured=self.result_credentials_configured,
+            compression_action=self.compression_action,
+            compression_result=self.compression_result,
             created_by=self.created_by,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -662,6 +666,8 @@ class PendingCommandRow(Table):
             failure_code=command.failure_code,
             completed_at=command.completed_at,
             result_credentials_configured=command.result_credentials_configured,
+            compression_action=command.compression_action,
+            compression_result=command.compression_result,
             created_by=command.created_by,
             created_at=command.created_at,
             updated_at=command.updated_at,

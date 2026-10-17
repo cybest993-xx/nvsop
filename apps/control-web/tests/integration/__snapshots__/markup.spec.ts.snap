@@ -95,6 +95,31 @@ exports[`the device page > renders connector configuration with a delegated test
     </button>
   </header>
   <!--v-if-->
+  <section class="compression" aria-labelledby="compression-heading">
+    <div class="compression__header">
+      <div>
+        <p class="compression__eyebrow">推理机 / 录像管理</p>
+        <h2 id="compression-heading">录像压缩归档</h2>
+        <p>暂停保留当前进度；中止后从保留原件重新编码。录像仅在校验通过后替换。</p>
+      </div><label for="recording-compression-host" class="compression__host">推理机 <select id="recording-compression-host" aria-label="录像压缩推理机">
+          <!--v-if-->
+          <option value="host-1">推理机 A</option>
+        </select></label>
+    </div>
+    <div class="compression__status" role="status" aria-live="polite"><strong>尚未取得实际状态</strong>
+      <!--v-if-->
+      <!--v-if-->
+      <!--v-if-->
+      <!--v-if-->
+      <!--v-if-->
+      <!--v-if-->
+    </div>
+    <div class="compression__actions">
+      <!--v-if-->
+      <!--v-if-->
+    </div>
+    <!--v-if-->
+  </section>
   <!--v-if-->
   <div class="devices__surface">
     <div class="devices__surface-head">
@@ -253,6 +278,31 @@ exports[`the device page > renders the connector form with only non-secret field
     </button>
   </header>
   <!--v-if-->
+  <section class="compression" aria-labelledby="compression-heading">
+    <div class="compression__header">
+      <div>
+        <p class="compression__eyebrow">推理机 / 录像管理</p>
+        <h2 id="compression-heading">录像压缩归档</h2>
+        <p>暂停保留当前进度；中止后从保留原件重新编码。录像仅在校验通过后替换。</p>
+      </div><label for="recording-compression-host" class="compression__host">推理机 <select id="recording-compression-host" aria-label="录像压缩推理机">
+          <!--v-if-->
+          <option value="host-1">推理机 A</option>
+        </select></label>
+    </div>
+    <div class="compression__status" role="status" aria-live="polite"><strong>尚未取得实际状态</strong>
+      <!--v-if-->
+      <!--v-if-->
+      <!--v-if-->
+      <!--v-if-->
+      <!--v-if-->
+      <!--v-if-->
+    </div>
+    <div class="compression__actions">
+      <!--v-if-->
+      <!--v-if-->
+    </div>
+    <!--v-if-->
+  </section>
   <!--v-if-->
   <div class="devices__surface">
     <div class="devices__surface-head">

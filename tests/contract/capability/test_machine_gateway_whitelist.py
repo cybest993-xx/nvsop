@@ -41,6 +41,8 @@ class MachineGatewayWhitelistTest(unittest.TestCase):
     def test_rule_opens_edge_reporting_and_keeps_browser_routes_out(self) -> None:
         rule = _machine_whitelist_rule(CONFIGS[0])
         for uri in (
+            "/api/v1/device-commands/compression/next",
+            "/api/v1/device-commands/compression/00000000-0000-0000-0000-000000000001/result",
             "/api/v1/monitor/reported-decisions",
             "/api/v1/monitor/reported-decisions/enveloped",
             "/api/v1/monitor/reported-disposals",
@@ -52,6 +54,9 @@ class MachineGatewayWhitelistTest(unittest.TestCase):
         ):
             self.assertIsNotNone(re.search(rule, uri), uri)
         for uri in (
+            "/api/v1/device-commands/compression/next/extra",
+            "/api/v1/device-commands/compression/arbitrary/result",
+            "/api/v1/inference-hosts/00000000-0000-0000-0000-000000000001/recording-compression/commands",
             "/api/v1/monitor/decisions",
             "/api/v1/retention/policy",
             "/api/v1/retention/policy/impact-estimate",

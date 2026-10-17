@@ -345,7 +345,7 @@ def _slice_source(
 
 
 @contextmanager
-def recording_material_access(directory: Path, *, exclusive: bool) -> Iterator[None]:
+def recording_material_access(directory: Path, *, exclusive: bool) -> Iterator[int]:
     """切片共享占用相机目录 inode, 压缩/替换排他且不等待; 进程退出自动释放。
 
     从探测/代次读取直到 ffmpeg 完成都持有共享锁, 避免 concat 尚未打开的分段被换代。
@@ -355,7 +355,7 @@ def recording_material_access(directory: Path, *, exclusive: bool) -> Iterator[N
     try:
         operation = fcntl.LOCK_EX | fcntl.LOCK_NB if exclusive else fcntl.LOCK_SH
         fcntl.flock(descriptor, operation)
-        yield
+        yield descriptor
     finally:
         os.close(descriptor)
 

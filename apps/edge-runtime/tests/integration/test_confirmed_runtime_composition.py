@@ -499,9 +499,12 @@ class ConfirmedRuntimeCompositionIntegrationTest(unittest.TestCase):
             ):
                 runtime = build_autonomous_runtime_from_file(enabled_path)
             try:
-                worker = runtime._compression
+                worker = runtime.compression
                 self.assertIsNotNone(worker)
                 assert worker is not None
+                self.assertEqual(worker.pause().state, "paused")
+                self.assertEqual(worker.drain().created, 0)
+                self.assertEqual(worker.resume().state, "idle")
                 # 生产装配真实编码并原子安装, 候选不再与原件并存。
                 summary = worker.drain()
                 self.assertEqual((summary.created, summary.replaced, summary.failed), (1, 1, 0))

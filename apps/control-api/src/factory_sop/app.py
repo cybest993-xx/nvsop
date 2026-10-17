@@ -63,6 +63,7 @@ from factory_sop.device.adapters.routes_commands import (
     connector_router as connector_commands_router,
 )
 from factory_sop.device.adapters.routes_commands import router as device_commands_router
+from factory_sop.device.adapters.routes_compression import router as compression_router
 from factory_sop.device.adapters.routes_connectors import router as connectors_router
 from factory_sop.device.adapters.routes_hosts import router as inference_hosts_router
 from factory_sop.device.adapters.routes_points import (
@@ -264,6 +265,7 @@ def create_app(
     app.include_router(configuration_router, prefix=API_PREFIX)
     app.include_router(inference_backends_router, prefix=API_PREFIX)
     app.include_router(device_commands_router, prefix=API_PREFIX)
+    app.include_router(compression_router, prefix=API_PREFIX)
     app.include_router(evidence_reclip_router, prefix=API_PREFIX)
     app.include_router(stations_router, prefix=API_PREFIX)
     app.include_router(cameras_router, prefix=API_PREFIX)

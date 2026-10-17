@@ -33,6 +33,7 @@ from nvsop_contracts import (
 )
 
 from edge_runtime.center_client import CenterClient
+from edge_runtime.compression_commands import CompressionCommandLoop
 from edge_runtime.configuration import (
     EdgeRuntimeConfiguration,
     LocalIsapiConnectorConfiguration,
@@ -948,6 +949,11 @@ class _RuntimeCycleRunner:
             return
         evidence.run_forever(should_stop=self._stop_requested)
 
+    def _run_compression_commands(self) -> None:
+        commands = self._runtime._compression_commands
+        if commands is not None:
+            commands.run_forever(should_stop=self._stop_requested)
+
     def _run_compression(self) -> None:
         compression = self._runtime._compression
         if compression is None:
@@ -1084,6 +1090,22 @@ class _RuntimeCycleRunner:
         with runtime._lock:
             stations = tuple(runtime._stations)
         threads = [
+            *(
+                [
+                    threading.Thread(
+                        target=self._guard,
+                        args=(
+                            lambda: self._isolate_center_worker(
+                                "compression_commands", self._run_compression_commands
+                            ),
+                        ),
+                        name="edge-compression-commands",
+                        daemon=True,
+                    )
+                ]
+                if runtime._compression_commands is not None
+                else []
+            ),
             *(
                 [
                     threading.Thread(
@@ -1239,6 +1261,7 @@ class AutonomousRuntime:
         media: MediaRuntime | None = None,
         evidence: EvidenceMediaWorker | None = None,
         compression: RecordingCompressionWorker | None = None,
+        compression_commands: CompressionCommandLoop | None = None,
         evidence_registration: EvidenceReferenceReconciler | None = None,
         evidence_deletion: EvidenceDeletionExecutor | None = None,
         reclip_loop: ReclipCommandLoop | None = None,
@@ -1261,6 +1284,7 @@ class AutonomousRuntime:
         self._media = media
         self._evidence = evidence
         self._compression = compression
+        self._compression_commands = compression_commands
         self._evidence_registration = evidence_registration
         self._evidence_deletion = evidence_deletion
         self._reclip_loop = reclip_loop
@@ -1296,6 +1320,11 @@ class AutonomousRuntime:
     def evidence_deletion(self) -> EvidenceDeletionExecutor | None:
         """本机证据删除执行器; 调度归 #207, 本属性提供可调用的生产接缝。"""
         return self._evidence_deletion
+
+    @property
+    def compression(self) -> RecordingCompressionWorker | None:
+        """本机管理使用已装配的唯一压缩 worker 控制/查询任务, 不新建执行者。"""
+        return self._compression
 
     @property
     def configuration(self) -> RuntimeConfiguration | None:
@@ -2094,6 +2123,7 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                     compression_age_seconds=(media_configuration.recording_compression_age_seconds),
                     segment_duration_seconds=(media_configuration.record_segment_duration_seconds),
                     crf=media_configuration.recording_compression_crf,
+                    readrate=media_configuration.recording_compression_readrate,
                     timeout_seconds=evidence_configuration.slice_timeout_seconds,
                     recording_timezone=evidence_configuration.recording_timezone,
                 ),
@@ -2137,6 +2167,11 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
             media=MediaRuntime(config.media) if config.media is not None else None,
             evidence=evidence_worker,
             compression=compression_worker,
+            compression_commands=CompressionCommandLoop(
+                client=_center_client(config),
+                worker=compression_worker,
+                interval=config.command_poll_interval,
+            ),
             evidence_registration=(
                 EvidenceReferenceReconciler(
                     state=state,

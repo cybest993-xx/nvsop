@@ -32,9 +32,11 @@ from edge_runtime.evidence_media import (
 from edge_runtime.judgment.evidence import EvidenceClip
 from edge_runtime.judgment.model import Decision, EvidenceSpan, HostInstant, Instance, Lifecycle
 from edge_runtime.judgment.reasons import Verdict
-from edge_runtime.local_state import EvidenceSource, LocalState, open_local_state
+from edge_runtime.local_state import EvidenceSource, LocalState, QueueStatus, open_local_state
 from edge_runtime.local_state.queues import PendingEvidence
 from edge_runtime.recording_compression import (
+    CompressionSummary,
+    JudgmentBacklogChecker,
     RecordingCompressionConfiguration,
     RecordingCompressionError,
     RecordingCompressionWorker,
@@ -209,6 +211,202 @@ class RecordingCompressionTest(unittest.TestCase):
             worker.abort()
             thread.join(5)
 
+    def test_judgment_backlog_checker_validates_and_tracks_hysteresis(self) -> None:
+        depths = {"observation": 0, "report": 0, "evidence": 0, "health": 0}
+
+        def provider() -> tuple[QueueStatus, ...]:
+            return tuple(
+                QueueStatus(
+                    name=name,
+                    depth=depth,
+                    oldest_queue_id=1,
+                    last_failure=None,
+                    last_failed_queue_id=None,
+                    limit=1000,
+                )
+                for name, depth in depths.items()
+            )
+
+        checker = JudgmentBacklogChecker(provider, threshold=10, recovery_threshold=4)
+        self.assertEqual(checker.threshold, 10)
+        self.assertEqual(checker.recovery_threshold, 4)
+
+        # 初始深度为 0: 无积压
+        backlogged, reason = checker()
+        self.assertFalse(backlogged)
+        self.assertIsNone(reason)
+
+        # 深度上升但未达阈值 (9 < 10)
+        depths["observation"] = 9
+        backlogged, reason = checker()
+        self.assertFalse(backlogged)
+        self.assertIsNone(reason)
+
+        # 达到阈值 10: 触发让路
+        depths["observation"] = 10
+        backlogged, reason = checker()
+        self.assertTrue(backlogged)
+        self.assertIsNotNone(reason)
+        self.assertIn("judgment backlog in observation", reason or "")
+        self.assertIn("depth 10 >= threshold 10", reason or "")
+
+        # 深度轻微回落但高于恢复阈值 (8 > 4): 保持滞后让路状态, 避免抖动
+        depths["observation"] = 8
+        backlogged, reason = checker()
+        self.assertTrue(backlogged)
+
+        # 深度回落至恢复阈值 4: 解除让路
+        depths["observation"] = 4
+        backlogged, reason = checker()
+        self.assertFalse(backlogged)
+        self.assertIsNone(reason)
+
+        # 非监控队列 (如 health) 积压不触发让路
+        depths["health"] = 100
+        backlogged, reason = checker()
+        self.assertFalse(backlogged)
+
+        # 报告队列积压同样触发让路
+        depths["report"] = 10
+        backlogged, reason = checker()
+        self.assertTrue(backlogged)
+        self.assertIn("judgment backlog in report", reason or "")
+
+        # 非法阈值校验
+        with self.assertRaises(ValueError):
+            JudgmentBacklogChecker(provider, threshold=0)
+        with self.assertRaises(ValueError):
+            JudgmentBacklogChecker(provider, threshold=10, recovery_threshold=10)
+        with self.assertRaises(ValueError):
+            JudgmentBacklogChecker(provider, threshold=10, recovery_threshold=15)
+        with self.assertRaises(ValueError):
+            JudgmentBacklogChecker(provider, threshold=10, recovery_threshold=-1)
+
+    def test_auto_yield_interrupts_encode_and_releases_camera_directory(self) -> None:
+        """让路中断在飞编码并释放录像目录占用, 让证据切片不被压缩让路一起拖住。"""
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        original = digest(source)
+        backlogged = False
+        reason = "judgment backlog in observation (depth 12 >= threshold 10)"
+
+        def backlog_signal() -> tuple[bool, str | None]:
+            return (backlogged, reason if backlogged else None)
+
+        worker = RecordingCompressionWorker(
+            configuration=replace(self.configuration(), readrate=0.5),
+            interval=1.0,
+            backlog_check=backlog_signal,
+        )
+        results = []
+        thread = Thread(target=lambda: results.append(worker.drain()))
+        thread.start()
+        try:
+            self.wait_state(worker, "running")
+            pid = worker.status().pid
+            assert pid is not None
+
+            # 真实子进程在飞时触发积压: 本轮中断并收割编码进程, 原件不受影响。
+            backlogged = True
+            with self.assertLogs("edge_runtime", level="INFO") as captured:
+                thread.join(15)
+            self.assertTrue(
+                any(
+                    "edge.recording_compression.yielded" in line
+                    and "judgment backlog in observation" in line
+                    for line in captured.output
+                ),
+                captured.output,
+            )
+            self.assertFalse(thread.is_alive())
+            self.assertEqual((results[0].created, results[0].replaced), (0, 0))
+            self.assertFalse(Path(f"/proc/{pid}").exists())
+            self.assertEqual(digest(source), original)
+            self.assertEqual(list(directory.glob(".*.candidate.mp4")), [])
+            self.assertIsNone(validated_candidate(source))
+
+            # 让路必须立刻交回录像目录排他占用: 否则阻塞式切片会在整个积压期间等锁。
+            with recording_material_access(directory, exclusive=True):
+                pass
+            with recording_material_access(self.recording, exclusive=True):
+                pass
+
+            status = worker.status()
+            self.assertEqual(status.state, "paused")
+            self.assertEqual(status.requested, "run")
+            self.assertIn("auto-yield: judgment backlog in observation", status.detail or "")
+
+            # 让路期间重复 drain 不启动编码, 也不争用资源。
+            self.assertEqual(worker.drain().created, 0)
+
+            # 积压解除后按普通一轮重新开始并完成安装。
+            backlogged = False
+            with self.assertLogs("edge_runtime", level="INFO") as resumed:
+                summary = worker.drain()
+            self.assertTrue(
+                any("edge.recording_compression.resumed" in line for line in resumed.output),
+                resumed.output,
+            )
+            self.assertEqual((summary.created, summary.replaced, summary.failed), (1, 1, 0))
+            self.assertEqual(recording_segment_generation(source), "compressed")
+            self.assertEqual(worker.status().state, "idle")
+            self.assertIsNone(worker.status().detail)
+        finally:
+            worker.abort()
+            thread.join(5)
+
+    def test_operator_pause_is_not_undone_by_backlog_clearing(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
+        backlogged = True
+
+        def backlog_signal() -> tuple[bool, str | None]:
+            return (backlogged, "test backlog" if backlogged else None)
+
+        worker = RecordingCompressionWorker(
+            configuration=replace(self.configuration(), readrate=0.5),
+            interval=1.0,
+            backlog_check=backlog_signal,
+        )
+        try:
+            # 让路期间的显式 pause 固化为操作者意图。
+            self.assertEqual(worker.drain().created, 0)
+            self.assertEqual(worker.status().state, "paused")
+            self.assertEqual(worker.pause().requested, "pause")
+
+            # 积压解除并重新采样到解除事件后仍保持操作者意图, 不自动开始编码。
+            backlogged = False
+            with self.assertLogs("edge_runtime", level="INFO") as resumed:
+                self.assertEqual(worker.drain().created, 0)
+            self.assertTrue(
+                any("edge.recording_compression.resumed" in line for line in resumed.output),
+                resumed.output,
+            )
+            status = worker.status()
+            self.assertEqual(status.state, "paused")
+            self.assertEqual(status.requested, "pause")
+            self.assertEqual(recording_segment_generation(source), "original")
+        finally:
+            worker.abort()
+
+    def test_drain_skips_starting_when_backlogged(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        worker = RecordingCompressionWorker(
+            configuration=self.configuration(),
+            interval=1.0,
+            backlog_check=lambda: (True, "judgment backlog in observation"),
+        )
+        summary = worker.drain()
+        self.assertEqual(summary.created, 0)
+        self.assertEqual(summary.replaced, 0)
+        status = worker.status()
+        self.assertEqual(status.state, "paused")
+        self.assertEqual(status.requested, "run")
+        self.assertIn("auto-yield: judgment backlog in observation", status.detail or "")
+
     def test_abort_reaps_stopped_process_preserves_source_and_restart_resumes(self) -> None:
         directory = self.recording / CAMERA
         segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
@@ -310,6 +508,7 @@ thread.join()
             while restarted.status().state == "busy" and monotonic() < deadline:
                 sleep(0.02)
             restarted.resume()
+            result = CompressionSummary(0, 0, 0)
             while monotonic() < deadline:
                 result = restarted.drain()
                 if result.replaced:

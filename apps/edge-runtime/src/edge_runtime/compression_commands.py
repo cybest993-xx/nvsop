@@ -146,7 +146,7 @@ class CompressionCommandLoop:
             observed.pid,
             self._worker.readrate,
             failure or ("control_state_invalid" if observed.state == "unavailable" else None),
-            (detail or observed.detail or "")[:255] or None,
+            " / ".join(part for part in (detail, observed.detail) if part)[:255] or None,
         )
 
     def run_forever(self, *, should_stop: Callable[[], bool]) -> None:

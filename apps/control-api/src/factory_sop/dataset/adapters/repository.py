@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
@@ -697,6 +697,33 @@ class PostgresDatasetRepository:
                 updated_at=now,
             )
         )
+
+    def confirm_training_cancellation(
+        self, *, command_id: UUID, base_job_id: str, response: Mapping[str, object], now: datetime
+    ) -> bool:
+        """停止核实成功后，在同一事务中取消命令、记录响应并释放在途约束。"""
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TrainingCommandRow)
+                .where(
+                    TrainingCommandRow.id == command_id,
+                    TrainingCommandRow.status == TrainingCommandStatus.BOUND.value,
+                    TrainingCommandRow.base_job_id == base_job_id,
+                    TrainingCommandRow.cancel_requested_at.is_not(None),
+                    TrainingCommandRow.service == TrainingService.DDM.value,
+                )
+                .values(
+                    status=TrainingCommandStatus.CANCELLED.value,
+                    cancelled_by=TrainingCommandRow.cancel_requested_by,
+                    cancelled_at=now,
+                    cancel_response=dict(response),
+                    cancel_detail=None,
+                    updated_at=now,
+                )
+            ),
+        )
+        return result.rowcount == 1
 
     def begin_training_dispatch(
         self,

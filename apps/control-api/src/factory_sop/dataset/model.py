@@ -113,7 +113,7 @@ class TrainingCommandStatus(StrEnum):
 
     ``bound`` 与 ``result_unknown`` 都是仍在途的保护状态；``failed`` 表示可以证明
     基座未开始或已终止失败；``completed`` 表示基座成功且结果已登记。
-    ``cancelled`` 仅表示派发意图前取消，不证明已派发的基座任务停止。
+    ``cancelled`` 对未派发命令表示本地取消；对已派发 DDM 必须有前后进程停止核实。
     """
 
     PENDING = "pending"
@@ -301,8 +301,8 @@ class TrainingCommand:
     failure_detail: str | None = None
     cancelled_by: UUID | None = None
     cancelled_at: datetime | None = None
-    # 已派发命令的取消请求与基座原响应：请求只记第一次；``cancel_response`` 保存基座取消
-    # 入口的真实响应，``cancel_detail`` 是本次核实结论（无进程停止证明时保留未核实）。
+    # 已派发命令的取消事实只记第一次请求：DDM 必须核实进程停止后才可取消终结，
+    # VLM 无停止证明时保留在途；原取消响应与本次核实结论分别记录。
     cancel_requested_by: UUID | None = None
     cancel_requested_at: datetime | None = None
     cancel_response: Mapping[str, Any] | None = None

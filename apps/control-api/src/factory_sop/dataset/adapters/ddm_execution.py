@@ -107,6 +107,13 @@ class HttpDdmTrainingBackend:
             service_label=_SERVICE_LABEL,
         )
 
+    def cancel(self, *, job_id: str) -> Mapping[str, Any]:
+        """只调用 DDM 基座实际存在的取消入口；响应并非进程停止证明。"""
+        body = self._request(
+            method="POST", path=f"{self._base_path}/api/v1/fine-tuning/cancel/{job_id}"
+        )
+        return json_document(body, service_label=_SERVICE_LABEL)
+
     def _request(self, *, method: str, path: str) -> bytes:
         return http_request(
             scheme=self._scheme,
@@ -170,10 +177,7 @@ class DdmTrainingServiceAdapter:
         return self._backend.status(job_id)
 
     def cancel(self, *, job_id: str) -> Mapping[str, Any]:
-        """DDM 已派发取消的停止核实由 S082 拥有，本部署未开放该入口。"""
-        raise TrainingBackendUnavailableError(
-            "DDM 已派发命令的停止核实尚未开放，不能证明进程已停止"
-        )
+        return self._backend.cancel(job_id=job_id)
 
     def prepare(
         self,

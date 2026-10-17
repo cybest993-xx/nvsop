@@ -38,8 +38,8 @@ MAX_IDEMPOTENCY_KEY_LENGTH = 255
 _GENERATED_PAYLOAD_KEYS = frozenset({"input_id"})
 
 # 已派发命令的取消只调用该服务自己的真实取消入口，且不把响应文案当成进程停止证明。
-# DDM 侧的停止核实由 S082 拥有，本票不代其实现，故这里只包含本票接入的 VLM。
-DISPATCHED_CANCELLATION_SERVICES = frozenset({TrainingService.VLM})
+# DDM 按 S082 核实真实进程停止后才释放在途约束；VLM 暂无可信停止证明。
+DISPATCHED_CANCELLATION_SERVICES = frozenset({TrainingService.DDM, TrainingService.VLM})
 
 _COMMAND_NOT_FOUND = {
     TrainingService.DDM: DatasetRefusalCode.DDM_TRAINING_COMMAND_NOT_FOUND,
@@ -239,7 +239,7 @@ def cancel_training_command(
         return command
     raise DatasetRefusedError(
         DatasetRefusalCode.USAGE_STATE_CONFLICT,
-        detail="命令已进入派发或已结束，不能按未派发任务取消；此操作不证明基座已停止",
+        detail="命令已进入派发或已结束，不能按未派发任务取消；此操作不证明基座已停止；历史事实保持不变",
     )
 
 

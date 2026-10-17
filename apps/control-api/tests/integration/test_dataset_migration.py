@@ -451,7 +451,7 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
             )
         ).scalar_one()
     # #215：正常交权授予结果与既有引用保护、回收账本随 head 到位。
-    assert version == "0073"
+    assert version == "0074"
     assert {"new_grant_id", "granted_at", "granted_by"} <= _columns(
         database_at_0023, "execution_normal_handover"
     )
@@ -705,8 +705,16 @@ def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
         assert new["cancelled_at"] is None
         assert {key: value for key, value in new.items() if key in old} == dict(old)
 
-    # 0073：表按训练服务改名，既有行回填为 ddm，幂等键与在途保护加入服务维度。
+    # 0073 保持 DDM 历史命令并新增已派发取消事实；0074 再扩展到 VLM 服务维度。
     command.upgrade(configuration, "0073")
+    assert "dataset_ddm_training_command" in _tables(database_at_0023)
+    assert {
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } <= _columns(database_at_0023, "dataset_ddm_training_command")
+    command.upgrade(configuration, "0074")
     assert "dataset_ddm_training_command" not in _tables(database_at_0023)
     assert "dataset_training_command" in _tables(database_at_0023)
     assert {
@@ -784,15 +792,23 @@ def test_ddm_dispatch_and_cancel_migrations_preserve_payload_and_inflight_index(
             {"id": uuid4(), "dataset_id": dataset_id, "digest": "1" * 64, "actor": actor},
         )
 
-    # 单服务回退无法表示 VLM 命令：显式失败而不是静默删除或改建已写入的命令事实。
+    # 回到 0073 的单服务 schema 不能丢失 VLM 命令；但既有 DDM 取消事实需保持。
     with pytest.raises(DBAPIError, match="non-DDM"):
-        command.downgrade(configuration, "0072")
+        command.downgrade(configuration, "0073")
     with database_at_0023.begin() as connection:
         connection.execute(text("DELETE FROM dataset_training_command WHERE service = 'vlm'"))
-    command.downgrade(configuration, "0072")
+    command.downgrade(configuration, "0073")
     assert "dataset_training_command" not in _tables(database_at_0023)
     assert "dataset_ddm_training_command" in _tables(database_at_0023)
     assert "service" not in _columns(database_at_0023, "dataset_ddm_training_command")
+    assert {
+        "cancel_requested_by",
+        "cancel_requested_at",
+        "cancel_response",
+        "cancel_detail",
+    } <= _columns(database_at_0023, "dataset_ddm_training_command")
+    # 只有再回退 0073 时才移除该版本增加的取消事实列。
+    command.downgrade(configuration, "0072")
     assert not {
         "cancel_requested_by",
         "cancel_requested_at",

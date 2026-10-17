@@ -1694,6 +1694,22 @@ export type DdmTrainingCommandView = {
    */
   base_total_steps: number | null
   /**
+   * Cancel Detail
+   */
+  cancel_detail?: string | null
+  /**
+   * Cancel Requested At
+   */
+  cancel_requested_at?: string | null
+  /**
+   * Cancel Requested By
+   */
+  cancel_requested_by?: string | null
+  /**
+   * Cancel Response Message
+   */
+  cancel_response_message?: string | null
+  /**
    * Cancelled At
    */
   cancelled_at?: string | null

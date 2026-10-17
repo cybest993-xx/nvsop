@@ -795,7 +795,9 @@ class TrainingCommandRow(Table):
             cancelled_at=self.cancelled_at,
             cancel_requested_by=self.cancel_requested_by,
             cancel_requested_at=self.cancel_requested_at,
-            cancel_response=self.cancel_response,
+            cancel_response=dict(self.cancel_response)
+            if self.cancel_response is not None
+            else None,
             cancel_detail=self.cancel_detail,
             last_observed_at=self.last_observed_at,
             observation_failure_code=self.observation_failure_code,

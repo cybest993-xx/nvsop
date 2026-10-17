@@ -715,8 +715,16 @@ class PostgresTrainingCommandExecutor:
         base_job_id = command.base_job_id
         if base_job_id is None:
             return TrainingDispatchResult(TrainingDispatchOutcome.BOUND, command)
-        if command.cancel_requested_at is not None and command.cancel_response is None:
-            self._request_dispatched_cancellation(command, base_job_id=base_job_id, now=now)
+        if command.cancel_requested_at is not None:
+            if command.service is TrainingService.DDM:
+                cancelled = self._verify_ddm_dispatched_cancellation(
+                    command, base_job_id=base_job_id, now=now
+                )
+                if cancelled is not None:
+                    return cancelled
+            elif command.cancel_response is None:
+                # VLM 原基座尚无进程停止证明，只请求一次、保留在途事实。
+                self._request_dispatched_cancellation(command, base_job_id=base_job_id, now=now)
         try:
             observation = self._adapter.status(base_job_id)
         except TrainingBackendUnavailableError as error:
@@ -749,6 +757,81 @@ class PostgresTrainingCommandExecutor:
         return self._advance_observation(
             current, base_job_id=base_job_id, observation=current.base_observation or {}, now=now
         )
+
+    def _verify_ddm_dispatched_cancellation(
+        self, command: TrainingCommand, *, base_job_id: str, now: datetime
+    ) -> TrainingDispatchResult | None:
+        """DDM 只据发送取消前后真实进程变化与已取消状态确认停止（S082）。
+
+        取消响应、HTTP 200 或 cancelled 元数据均不足以释放在途保护；未知仍只读原任务。
+        """
+        try:
+            before = self._adapter.all_jobs()
+        except TrainingBackendUnavailableError:
+            self._record_cancellation(
+                command_id=command.id,
+                base_job_id=base_job_id,
+                response={"outcome": "unreachable", "stage": "pre_observation"},
+                detail="无法在取消前查询基座任务集合，不能证明进程已停止",
+                now=now,
+            )
+            return None
+        pre = _base_job_facts(before.get(base_job_id))
+        try:
+            response = self._adapter.cancel(job_id=base_job_id)
+        except TrainingBackendUnavailableError as error:
+            self._record_cancellation(
+                command_id=command.id,
+                base_job_id=base_job_id,
+                response=_cancel_failure_fact(error),
+                detail="基座取消入口未成功返回，不能证明进程已停止" + error.safe_fact,
+                now=now,
+            )
+            return None
+        fact = _ddm_cancel_response_fact(response)
+        try:
+            after = self._adapter.all_jobs()
+        except TrainingBackendUnavailableError:
+            self._record_cancellation(
+                command_id=command.id,
+                base_job_id=base_job_id,
+                response=fact,
+                detail="取消响应已保存，但无法确认基座当前状态，不能证明进程已停止",
+                now=now,
+            )
+            return None
+        post = _base_job_facts(after.get(base_job_id))
+        if (
+            pre.process_live
+            and not post.process_live
+            and post.status is TrainingBaseStatus.CANCELLED
+        ):
+            with self._factory() as session:
+                confirmed = PostgresDatasetRepository(session).confirm_training_cancellation(
+                    command_id=command.id, base_job_id=base_job_id, response=fact, now=now
+                )
+                if not (confirmed and self._commit(session, command.id)):
+                    # 失去 job fence 时即使基座已停止，也不得发布取消终态。
+                    return None
+            current = self._load(command.id)
+            if current is None:
+                return TrainingDispatchResult(TrainingDispatchOutcome.NOT_FOUND, None)
+            _logger.info(
+                "dataset.training_dispatch.cancellation_confirmed",
+                command_id=str(command.id),
+                service=command.service.value,
+                base_job_id=base_job_id,
+                result="cancelled",
+            )
+            return TrainingDispatchResult(TrainingDispatchOutcome.CANCELLED, current)
+        self._record_cancellation(
+            command_id=command.id,
+            base_job_id=base_job_id,
+            response=fact,
+            detail=_cancellation_unverified_detail(pre, post),
+            now=now,
+        )
+        return None
 
     def _request_dispatched_cancellation(
         self, command: TrainingCommand, *, base_job_id: str, now: datetime
@@ -1406,6 +1489,49 @@ def _base_status(value: object) -> TrainingBaseStatus | None:
         return TrainingBaseStatus(value)
     except ValueError:
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class _BaseJobFacts:
+    status: TrainingBaseStatus | None = None
+    process_live: bool = False
+
+
+def _base_job_facts(job: Mapping[str, Any] | None) -> _BaseJobFacts:
+    if job is None:
+        return _BaseJobFacts()
+    return _BaseJobFacts(
+        status=_base_status(job.get("status")),
+        process_live=bool(job.get("process_pid")),
+    )
+
+
+def _ddm_cancel_response_fact(response: Mapping[str, Any]) -> dict[str, Any]:
+    """DDM 只持久化基座取消原文案，不存任意内部字段或 URL。"""
+    fact: dict[str, Any] = {"outcome": "responded"}
+    message = response.get("message")
+    if isinstance(message, str):
+        fact["message"] = _truncate(message, 512)
+    return fact
+
+
+def _cancel_failure_fact(error: TrainingBackendUnavailableError) -> dict[str, Any]:
+    fact: dict[str, Any] = {"outcome": "cancel_failed"}
+    if error.http_status is not None:
+        fact["http_status"] = error.http_status
+    if error.error_type is not None:
+        fact["error_type"] = error.error_type
+    return fact
+
+
+def _cancellation_unverified_detail(pre: _BaseJobFacts, post: _BaseJobFacts) -> str:
+    if post.process_live:
+        return "取消后基座仍报告在运行的进程，停止状态待核实"
+    if not pre.process_live:
+        return "取消前基座未报告在运行的进程，不能证明进程已停止"
+    if post.status is None:
+        return "基座任务集合缺少可核对的原状态，不能证明进程已停止"
+    return "基座状态未达到可核实停止的已取消终态，停止状态待核实"
 
 
 def _cancel_response_fact(response: Mapping[str, Any]) -> dict[str, Any]:

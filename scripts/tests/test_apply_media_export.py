@@ -93,6 +93,8 @@ class ApplyMediaExportTest(unittest.TestCase):
                             "recording_compression_age_seconds": 3600,
                             "recording_compression_enabled": True,
                             "recording_compression_crf": 30,
+                            "recording_compression_backlog_threshold": 25,
+                            "recording_compression_backlog_recovery_threshold": 3,
                             "cameras": [{"camera_id": camera_id, "sop_execution": False}],
                         },
                     }
@@ -108,6 +110,9 @@ class ApplyMediaExportTest(unittest.TestCase):
             self.assertEqual(3600, result["media"]["recording_compression_age_seconds"])
             self.assertTrue(result["media"]["recording_compression_enabled"])
             self.assertEqual(30, result["media"]["recording_compression_crf"])
+            # S050 让路阈值同样是本机策略, 不能被导出合并抹回默认值。
+            self.assertEqual(25, result["media"]["recording_compression_backlog_threshold"])
+            self.assertEqual(3, result["media"]["recording_compression_backlog_recovery_threshold"])
             self.assertEqual(camera_id, result["media"]["cameras"][0]["camera_id"])
             self.assertFalse(result["media"]["cameras"][0]["sop_execution"])
             rendered = json.dumps(result)

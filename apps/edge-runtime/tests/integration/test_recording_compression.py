@@ -282,10 +282,12 @@ class RecordingCompressionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             JudgmentBacklogChecker(provider, threshold=10, recovery_threshold=-1)
 
-    def test_auto_yield_pauses_real_process_on_backlog_and_resumes_when_cleared(self) -> None:
+    def test_auto_yield_interrupts_encode_and_releases_camera_directory(self) -> None:
+        """让路中断在飞编码并释放录像目录占用, 让证据切片不被压缩让路一起拖住。"""
         directory = self.recording / CAMERA
         segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
         source = next(directory.glob("*.mp4"))
+        original = digest(source)
         backlogged = False
         reason = "judgment backlog in observation (depth 12 >= threshold 10)"
 
@@ -293,7 +295,7 @@ class RecordingCompressionTest(unittest.TestCase):
             return (backlogged, reason if backlogged else None)
 
         worker = RecordingCompressionWorker(
-            configuration=replace(self.configuration(), readrate=0.5, timeout_seconds=4.0),
+            configuration=replace(self.configuration(), readrate=0.5),
             interval=1.0,
             backlog_check=backlog_signal,
         )
@@ -305,10 +307,10 @@ class RecordingCompressionTest(unittest.TestCase):
             pid = worker.status().pid
             assert pid is not None
 
-            # 注入积压信号: worker 自动让路向子进程发 SIGSTOP, 内核确认挂起
+            # 真实子进程在飞时触发积压: 本轮中断并收割编码进程, 原件不受影响。
             backlogged = True
             with self.assertLogs("edge_runtime", level="INFO") as captured:
-                self.wait_state(worker, "paused")
+                thread.join(15)
             self.assertTrue(
                 any(
                     "edge.recording_compression.yielded" in line
@@ -317,39 +319,47 @@ class RecordingCompressionTest(unittest.TestCase):
                 ),
                 captured.output,
             )
+            self.assertFalse(thread.is_alive())
+            self.assertEqual((results[0].created, results[0].replaced), (0, 0))
+            self.assertFalse(Path(f"/proc/{pid}").exists())
+            self.assertEqual(digest(source), original)
+            self.assertEqual(list(directory.glob(".*.candidate.mp4")), [])
+            self.assertIsNone(validated_candidate(source))
+
+            # 让路必须立刻交回录像目录排他占用: 否则阻塞式切片会在整个积压期间等锁。
+            with recording_material_access(directory, exclusive=True):
+                pass
+            with recording_material_access(self.recording, exclusive=True):
+                pass
+
             status = worker.status()
             self.assertEqual(status.state, "paused")
             self.assertEqual(status.requested, "run")
             self.assertIn("auto-yield: judgment backlog in observation", status.detail or "")
-            self.assertIn("T (stopped)", Path(f"/proc/{pid}/status").read_text())
 
-            # 让路期间第二个 drain 尝试跳过, 不争用资源
+            # 让路期间重复 drain 不启动编码, 也不争用资源。
             self.assertEqual(worker.drain().created, 0)
 
-            # 超时冻结检查: 挂起时间超过 4.0s 超时配置, 恢复后不应误判超时
-            sleep(4.2)
-
-            # 解除积压: worker 自动发 SIGCONT 恢复真实子进程并完成编码替换
+            # 积压解除后按普通一轮重新开始并完成安装。
             backlogged = False
             with self.assertLogs("edge_runtime", level="INFO") as resumed:
-                thread.join(15)
+                summary = worker.drain()
             self.assertTrue(
                 any("edge.recording_compression.resumed" in line for line in resumed.output),
                 resumed.output,
             )
-            self.assertFalse(thread.is_alive())
-            self.assertEqual((results[0].replaced, results[0].failed), (1, 0))
+            self.assertEqual((summary.created, summary.replaced, summary.failed), (1, 1, 0))
             self.assertEqual(recording_segment_generation(source), "compressed")
             self.assertEqual(worker.status().state, "idle")
-            self.assertEqual(worker.status().requested, "run")
             self.assertIsNone(worker.status().detail)
         finally:
             worker.abort()
             thread.join(5)
 
-    def test_manual_pause_takes_precedence_over_auto_yield_recovery(self) -> None:
+    def test_operator_pause_is_not_undone_by_backlog_clearing(self) -> None:
         directory = self.recording / CAMERA
         segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        source = next(directory.glob("*.mp4"))
         backlogged = True
 
         def backlog_signal() -> tuple[bool, str | None]:
@@ -360,22 +370,26 @@ class RecordingCompressionTest(unittest.TestCase):
             interval=1.0,
             backlog_check=backlog_signal,
         )
-        results = []
-        thread = Thread(target=lambda: results.append(worker.drain()))
-        thread.start()
         try:
-            self.wait_state(worker, "paused")
-            # 让路期间操作者显式调用 pause: 意图固化为 pause
-            worker.pause()
-            self.assertEqual(worker.status().requested, "pause")
-            # 外部积压消除后仍保持 pause, 不篡改操作者显式意图
-            backlogged = False
-            sleep(1.2)  # 超过积压采样间隔, 确保解除事件已被轮询到
+            # 让路期间的显式 pause 固化为操作者意图。
+            self.assertEqual(worker.drain().created, 0)
             self.assertEqual(worker.status().state, "paused")
-            self.assertEqual(worker.status().requested, "pause")
+            self.assertEqual(worker.pause().requested, "pause")
+
+            # 积压解除并重新采样到解除事件后仍保持操作者意图, 不自动开始编码。
+            backlogged = False
+            with self.assertLogs("edge_runtime", level="INFO") as resumed:
+                self.assertEqual(worker.drain().created, 0)
+            self.assertTrue(
+                any("edge.recording_compression.resumed" in line for line in resumed.output),
+                resumed.output,
+            )
+            status = worker.status()
+            self.assertEqual(status.state, "paused")
+            self.assertEqual(status.requested, "pause")
+            self.assertEqual(recording_segment_generation(source), "original")
         finally:
             worker.abort()
-            thread.join(5)
 
     def test_drain_skips_starting_when_backlogged(self) -> None:
         directory = self.recording / CAMERA

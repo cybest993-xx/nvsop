@@ -56,14 +56,19 @@ class FakeWorker:
 
     readrate = 0.25
 
-    def __init__(self, state: str = "idle", *, transient: bool = False) -> None:
+    def __init__(
+        self, state: str = "idle", *, transient: bool = False, detail: str | None = None
+    ) -> None:
         self.state = state
         self.requested = "run"
         self.calls: list[str] = []
         self._transient = transient
+        self.detail = detail
 
     def status(self) -> CompressionStatus:
-        return CompressionStatus(self.state, self.requested, "2026-10-17_12-00-00.mp4", None)
+        return CompressionStatus(
+            self.state, self.requested, "2026-10-17_12-00-00.mp4", None, self.detail
+        )
 
     def pause(self) -> CompressionStatus:
         self.calls.append("pause")
@@ -161,6 +166,19 @@ class CompressionCommandLoopTests(unittest.TestCase):
         _, body, _ = client.posts[0]
         assert body["state"] == "unavailable"
         assert body["failure_code"] == "compression_unavailable"
+
+    def test_inspect_reports_auto_yield_reason_through_the_existing_detail_field(self) -> None:
+        """判定积压让路的原因必须能从已有命令观测读到, 不需要新增契约字段。"""
+        worker = FakeWorker("paused", detail="auto-yield: judgment backlog in observation")
+        loop, client = self.loop(worker)
+        client.lease = _claim("inspect", lease_expires_at=1.0)
+        client.reports = [200]
+
+        assert loop.run_once() is True
+        _, body, _ = client.posts[0]
+        assert body["state"] == "paused"
+        assert body["detail"] == "auto-yield: judgment backlog in observation"
+        assert worker.calls == []
 
 
 if __name__ == "__main__":

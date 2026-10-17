@@ -2127,14 +2127,10 @@ def build_autonomous_runtime_from_file(config_path: str | Path) -> AutonomousRun
                     readrate=media_configuration.recording_compression_readrate,
                     timeout_seconds=evidence_configuration.slice_timeout_seconds,
                     recording_timezone=evidence_configuration.recording_timezone,
-                    backlog_threshold=(media_configuration.recording_compression_backlog_threshold),
-                    backlog_recovery_threshold=(
-                        media_configuration.recording_compression_backlog_recovery_threshold
-                    ),
                 ),
                 interval=_RECORDING_COMPRESSION_INTERVAL_SECONDS,
                 backlog_check=JudgmentBacklogChecker(
-                    state,
+                    state.queue_status,
                     threshold=media_configuration.recording_compression_backlog_threshold,
                     recovery_threshold=(
                         media_configuration.recording_compression_backlog_recovery_threshold

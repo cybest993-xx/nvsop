@@ -16,7 +16,6 @@
     "recording_compression_enabled": false,
     "recording_compression_age_seconds": 86400,
     "recording_compression_crf": 28,
-    "recording_compression_readrate": 0.5,
-    "recording_compression_backlog_threshold": 10
+    "recording_compression_readrate": 0.5
   }
 }

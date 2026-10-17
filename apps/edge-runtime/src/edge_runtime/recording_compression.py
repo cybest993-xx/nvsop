@@ -30,7 +30,7 @@ from edge_runtime.evidence_media import (
     recording_segment_generation,
     recording_segment_start,
 )
-from edge_runtime.local_state import LocalState, QueueStatus
+from edge_runtime.local_state import QueueStatus
 from edge_runtime.media import DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD
 from edge_runtime.recording_provenance import (
     RecordingCompressionCandidate,
@@ -92,8 +92,6 @@ class RecordingCompressionConfiguration:
     timeout_seconds: float
     recording_timezone: str | None
     readrate: float | None = None
-    backlog_threshold: int = DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD
-    backlog_recovery_threshold: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,7 +128,7 @@ class JudgmentBacklogChecker:
 
     def __init__(
         self,
-        provider: LocalState | Callable[[], tuple[QueueStatus, ...]],
+        provider: Callable[[], tuple[QueueStatus, ...]],
         *,
         threshold: int = DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD,
         recovery_threshold: int | None = None,
@@ -145,10 +143,7 @@ class JudgmentBacklogChecker:
             raise ValueError(
                 "backlog recovery threshold must be non-negative and strictly less than threshold"
             )
-        if isinstance(provider, LocalState):
-            self._provider: Callable[[], tuple[QueueStatus, ...]] = provider.queue_status
-        else:
-            self._provider = provider
+        self._provider = provider
         self._threshold = threshold
         self._recovery_threshold = resolved_recovery
         self._monitored_queues = monitored_queues
@@ -394,36 +389,31 @@ class RecordingCompressionWorker:
             raise ValueError("invalid compression control state")
         return cast(Literal["run", "pause", "abort"], document["requested"])
 
-    def _poll_backlog(self, *, force: bool = False) -> tuple[bool, str | None]:
+    def _poll_backlog(self, *, force: bool = False) -> None:
         if self._backlog_check is None:
-            return False, None
+            return
         # 积压信号读的是判定路径共用的 SQLite 连接: 按秒级节流, 不在编码轮询里密集抢占判定写锁。
         # 一轮压缩开始的 drain 不受节流影响: 它本来就按压缩间隔触发。
         current = monotonic()
         if not force and current < self._next_backlog_poll:
-            with self._control_lock:
-                return self._yielded, self._yield_reason
+            return
         self._next_backlog_poll = current + _BACKLOG_POLL_SECONDS
         try:
             backlogged, reason = self._backlog_check()
         except Exception as error:
+            # 压缩侧的积压采样失败不得变成判定侧故障: 保持上一轮判定并告警。
             _logger.warning("edge.recording_compression.backlog_check_failed error=%s", error)
-            return False, None
+            return
         with self._control_lock:
-            if backlogged != self._yielded:
-                self._yielded = backlogged
-                self._yield_reason = reason if backlogged else None
-                if backlogged:
-                    _logger.info("edge.recording_compression.yielded reason=%s", reason)
-                    if self._state == "running":
-                        self._state = "pausing"
-                    elif self._state == "idle":
-                        self._state = "paused"
-                else:
-                    _logger.info("edge.recording_compression.resumed reason=backlog_cleared")
-                    if self._state == "paused" and self._requested == "run":
-                        self._state = "resuming"
-        return backlogged, reason
+            if backlogged == self._yielded:
+                return
+            self._yielded = backlogged
+            self._yield_reason = reason if backlogged else None
+            _logger.info(
+                "edge.recording_compression.%s reason=%s",
+                "yielded" if backlogged else "resumed",
+                reason if backlogged else "backlog_cleared",
+            )
 
     @property
     def readrate(self) -> float | None:
@@ -562,7 +552,11 @@ class RecordingCompressionWorker:
             with self._control_lock:
                 if self._requested == "abort" or self._should_stop():
                     return False
-                if self._requested == "run" and not self._yielded:
+                if self._yielded:
+                    # 让路时长由判定积压决定, 不能继续持有录像目录排他占用把切片一起拖住:
+                    # 中断本轮让 drain 释放占用, 积压解除后按普通一轮重新开始。
+                    return False
+                if self._requested == "run":
                     return True
                 self._state = "paused"
             sleep(0.05)
@@ -594,16 +588,16 @@ class RecordingCompressionWorker:
                 with self._control_lock:
                     requested = self._requested
                     yielded = self._yielded
-                    interrupt = requested == "abort" or self._should_stop()
+                    interrupt = requested == "abort" or self._should_stop() or yielded
                     current = monotonic()
                     if not stopped:
                         active += current - previous
                     previous = current
                     if interrupt:
                         self._signal(process, signal.SIGKILL)
-                    elif (requested == "pause" or yielded) and not stopped:
+                    elif requested == "pause" and not stopped:
                         self._signal(process, signal.SIGSTOP)
-                    elif (requested == "run" and not yielded) and stopped:
+                    elif requested == "run" and stopped:
                         self._signal(process, signal.SIGCONT)
                     # 只有内核确认停止/继续事件后才发布相应实际状态。
                     pid, status = os.waitpid(process.pid, os.WNOHANG | os.WUNTRACED | os.WCONTINUED)
@@ -750,9 +744,9 @@ def _compress_segment(
     candidate = _candidate_path(segment)
     provenance = _provenance_path(segment)
     work: Path | None = None
-    source_stat: os.stat_result | None = None
+    # 源文件代次先取证: 原件消失或变化时 finally 必须能判断产物能否安全删除。
+    source_stat = segment.stat()
     try:
-        source_stat = segment.stat()
         work = _temporary_candidate(segment)
         _encode(segment, work, configuration, control=control)
         source_probe = _probe(segment, configuration, control=control)
@@ -789,10 +783,7 @@ def _compress_segment(
         raise RecordingCompressionError("io_failed", str(error)) from error
     finally:
         if work is not None and work.exists():
-            if source_stat is not None:
-                _discard_output_if_source_unchanged(work, segment, source_stat)
-            else:
-                work.unlink(missing_ok=True)
+            _discard_output_if_source_unchanged(work, segment, source_stat)
 
 
 def _discard_output_if_source_unchanged(

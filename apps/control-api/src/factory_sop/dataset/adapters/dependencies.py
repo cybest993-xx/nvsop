@@ -15,6 +15,7 @@ from factory_sop.auth.api import CurrentCallerResolver
 from factory_sop.dataset.adapters.annotation import HttpAnnotationBackend
 from factory_sop.dataset.adapters.annotation_volume import LocalAnnotationDataVolume
 from factory_sop.dataset.adapters.artifact_execution import PostgresDatasetArtifactExecutor
+from factory_sop.dataset.adapters.augmentation_execution import PostgresAugmentationExecutor
 from factory_sop.dataset.adapters.ddm import (
     LocalDdmResultVolume,
     NvidiaDdmAnnotationGenerator,
@@ -43,6 +44,7 @@ from factory_sop.dataset.api import (
     ArtifactTransactionCommitter,
     DatasetAnnotationRuntime,
     DatasetArtifactExecutor,
+    DatasetCommandExecutor,
     DatasetResourceLookup,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
@@ -53,6 +55,7 @@ from factory_sop.dataset.api import (
 )
 from factory_sop.dataset.media import MediaProbe
 from factory_sop.dataset.repository import (
+    AugmentationRepository,
     DatasetRepository,
     TrainingCommandRepository,
     UsageDatasetRepository,
@@ -71,8 +74,13 @@ def datasets(session: RequestSession) -> DatasetRepository:
 class _DatasetResourceLookup:
     """用数据集仓储确认任务资源仍然有效。"""
 
-    def __init__(self, datasets: TrainingCommandRepository) -> None:
+    def __init__(
+        self,
+        datasets: TrainingCommandRepository,
+        augmentations: AugmentationRepository | None = None,
+    ) -> None:
         self._datasets = datasets
+        self._augmentations = augmentations
 
     def resource_exists(self, member_id: UUID, attempt_id: UUID) -> bool:
         """确认成员与上传尝试或标注执行代次归属一致。"""
@@ -93,14 +101,17 @@ class _DatasetResourceLookup:
         ):
             if value is not None and value.dataset_id == dataset_id:
                 return True
-        return False
+        augmentation = (
+            self._augmentations.augmentation_by_id(resource_id) if self._augmentations else None
+        )
+        return augmentation is not None and augmentation.dataset_id == dataset_id
 
 
 def dataset_resource(
     datasets: Annotated[TrainingCommandRepository, Depends(datasets)],
 ) -> DatasetResourceLookup:
     """提供 job 查询任务资源归属所需的最小数据集契约。"""
-    return _DatasetResourceLookup(datasets)
+    return _DatasetResourceLookup(datasets, cast(AugmentationRepository, datasets))
 
 
 def storage(request: Request) -> ObjectStorage:
@@ -336,6 +347,25 @@ def vlm_executor(
                 dataset_root=dataset_root,
             ),
             discovery=NvidiaVlmJsonDiscovery(),
+        ),
+    )
+
+
+def augmentation_executor(
+    settings: Settings, factory: sessionmaker[DatabaseSession]
+) -> DatasetCommandExecutor | None:
+    """只在部署已绑定 URL 和共享卷时装配增强；未配置不影响现有 worker。"""
+    if settings.augmentation_backend_url is None:
+        return None
+    assert settings.augmentation_data_root is not None
+    return PostgresAugmentationExecutor(
+        factory=factory,
+        backend_url=settings.augmentation_backend_url,
+        timeout_seconds=settings.augmentation_http_timeout_seconds,
+        volume_root=Path(settings.augmentation_data_root),
+        storage_factory=lambda: LocalFileObjectStorage.from_settings(settings),
+        media_probe=FfprobeMediaProbe(
+            binary=settings.media_probe_binary, timeout_seconds=settings.media_probe_timeout_seconds
         ),
     )
 

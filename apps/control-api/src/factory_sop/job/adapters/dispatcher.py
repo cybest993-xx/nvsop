@@ -33,10 +33,12 @@ class ArqJobDispatcher:
         *,
         session_factory: sessionmaker[Session] | None = None,
         configured_training_types: frozenset[JobType] = frozenset(),
+        augmentation_configured: bool = False,
     ) -> None:
         self._settings = settings
         self._session_factory = session_factory
         self._configured_training_types = configured_training_types
+        self._augmentation_configured = augmentation_configured
 
     @classmethod
     def from_settings(
@@ -63,6 +65,7 @@ class ArqJobDispatcher:
                 ssl=connection.ssl,
             ),
             session_factory=session_factory,
+            augmentation_configured=settings.augmentation_backend_url is not None,
             configured_training_types=frozenset(
                 job_type
                 for job_type, configured in (
@@ -84,6 +87,11 @@ class ArqJobDispatcher:
     def configured_training_types(self) -> frozenset[JobType]:
         """训练配置有明确部署绑定时，扫描器才放行对应类型（不在启动时读取文件）。"""
         return self._configured_training_types
+
+    @property
+    def augmentation_configured(self) -> bool:
+        """增强有部署绑定时才投递；基座离线不影响其他任务。"""
+        return self._augmentation_configured
 
     @property
     def redis_settings(self) -> RedisSettings:
@@ -159,6 +167,10 @@ class ArqJobDispatcher:
             if JobType.DATASET_VLM_TRAINING not in self._configured_training_types:
                 return None
             return "dispatch_vlm_training_job", job.updated_at
+        if job.job_type is JobType.DATASET_AUGMENTATION:
+            if not self._augmentation_configured:
+                return None
+            return "augment_dataset_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION_PREPARATION:
             return "prepare_annotation_context_job", job.updated_at
         if job.job_type is JobType.DATASET_ANNOTATION:

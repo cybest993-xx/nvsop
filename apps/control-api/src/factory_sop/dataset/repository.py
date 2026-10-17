@@ -12,6 +12,7 @@ from factory_sop.dataset.model import (
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
+    AugmentationCommand,
     DatasetArtifact,
     DatasetMember,
     TrainingCommand,
@@ -236,6 +237,36 @@ class UsageDatasetRepository(DatasetRepository, Protocol):
 
     def save_artifact(self, value: DatasetArtifact, *, expected_updated_at: datetime) -> bool:
         """按执行租约写回制品。"""
+        ...
+
+
+class AugmentationRepository(DatasetRepository, Protocol):
+    """增强受理与状态存储，不扩张已有上传/用途测试的仓储要求。"""
+
+    def add_augmentation(self, value: AugmentationCommand) -> bool:
+        """仅追加；同一数据集幂等键已存在时返回 False。"""
+        ...
+
+    def augmentation_by_key(self, dataset_id: UUID, key: str) -> AugmentationCommand | None:
+        """读取首次受理事实。"""
+        ...
+
+    def augmentation_by_id(self, command_id: UUID) -> AugmentationCommand | None:
+        """读取最新持久事实。"""
+        ...
+
+    def list_augmentations(self, dataset_id: UUID) -> Sequence[AugmentationCommand]:
+        """按创建顺序读回命令历史。"""
+        ...
+
+    def save_augmentation(self, value: AugmentationCommand, *, expected_version: int) -> bool:
+        """围栏可变观测/登记字段；绝不改写首次输入。"""
+        ...
+
+    def cancel_pending_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> None:
+        """取消与派发意图在同一 pending 行上竞争。"""
         ...
 
 

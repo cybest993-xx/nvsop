@@ -450,14 +450,25 @@ def test_training_dataset_migration_upgrades_and_rolls_back_on_real_postgres(
                 "WHERE table_name = 'evidence_evidence' AND column_name = 'review_state_known'"
             )
         ).scalar_one()
-    # #212：压缩控制字段随 head 到位, 不改变既有命令的可空契约。
-    assert version == "0075"
+    # #212 录制压缩在 0075，增强产物登记在 0076，历史状态都必须存在。
+    assert version == "0076"
     assert {"compression_action", "compression_result"} <= _columns(
         database_at_0023, "device_pending_command"
     )
     command_columns = _nullable_columns(database_at_0023, "device_pending_command")
     assert command_columns["compression_action"] is True
     assert command_columns["compression_result"] is True
+    assert {"dataset_augmentation_command", "dataset_training_command"} <= _tables(database_at_0023)
+    assert {
+        "dataset_id",
+        "annotation_execution_id",
+        "label_data_id",
+        "idempotency_key",
+        "input_snapshot",
+        "base_augmentation_id",
+        "result_status",
+        "result_manifest",
+    } <= _columns(database_at_0023, "dataset_augmentation_command")
     # #215：正常交权授予结果与既有引用保护、回收账本随 head 到位。
     assert {"new_grant_id", "granted_at", "granted_by"} <= _columns(
         database_at_0023, "execution_normal_handover"

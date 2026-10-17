@@ -18,6 +18,7 @@ class JobType(StrEnum):
     DATASET_USAGE_CHECK = "dataset_usage_check"
     DATASET_ARTIFACT = "dataset_artifact"
     DATASET_DDM_TRAINING = "dataset_ddm_training"
+    DATASET_AUGMENTATION = "dataset_augmentation"
     DATASET_VLM_TRAINING = "dataset_vlm_training"
 
 
@@ -93,6 +94,16 @@ class UsageJobQueue(Protocol):
         self, *, dataset_id: UUID, artifact_id: UUID, now: datetime
     ) -> ApplicationJob:
         """为一份派生制品创建或复用异步任务。"""
+        ...
+
+
+class AugmentationJobQueue(Protocol):
+    """dataset 受理增强命令时写入同一事务的 outbox。"""
+
+    def get_or_create_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """返回原命令的唯一任务，不重开已终结的增强。"""
         ...
 
 

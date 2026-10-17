@@ -286,4 +286,7 @@ maintenance loop 按 `command_poll_interval_seconds` 继续拉取。相同 revis
 
 每个 readiness 在原 app 进程查询原 DB engine；DB 不可达返回 503。Nginx 运行时解析固定服务名，进程/DNS 不可用返回真实网关失败，不阻塞网关启动、不回退健康响应。上述四前缀的其他路径（含原静态 health、debug、clear 和训练写操作）仍拒绝。浏览器不能指定目标 host 或上游 URL。React 标注、媒体授权、源视频上传与结果读取继续使用既有入口，没有新增通用视频代理。
 
+
+增强应用命令（S077）从 Center 的 `training-datasets/{dataset_id}/augmentation-commands` 授权 API 受理；服务实际 HTTP 请求由中心 worker 对内调用原 `augmentation` FastAPI，而不是向浏览器开放另一个可直接写入的网关代理。可选地同时配置 `SOP_AUGMENTATION_BACKEND_URL`（内网 HTTP(S) 地址）和 `SOP_AUGMENTATION_DATA_ROOT`（中心 worker 与原基座挂载的同一绝对路径），超时可用 `SOP_AUGMENTATION_HTTP_TIMEOUT_SECONDS` 调整。只给其中一项会在 Center 配置校验时报错；均未配置时 outbox 命令保持待派发。原基座按已有 `label_data_id` 的数量生成非幂等后缀，因此同时派发同一标注输入或失联后盲重发会污染结果：在途约束保持在 PostgreSQL。原服务没有已派发取消入口，不能通过中心端模拟停止。
+
 四环境的冻结、构建和 CPU 部署证据命令及限制见[标注组合证据运行说明](annotation-evidence.md#训练环境冻结与统一入口验证s068)。GPU/完整生产安装兼容性、浏览器及离线制品验证不由 CPU readiness 证据替代。

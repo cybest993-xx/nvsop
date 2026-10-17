@@ -32,6 +32,7 @@ from factory_sop.dataset.api import (
     ArtifactExecutionResult,
     DatasetAnnotationRuntime,
     DatasetArtifactExecutor,
+    DatasetCommandExecutor,
     DatasetRefusedError,
     DatasetUsageRuntime,
     DatasetValidationRuntime,
@@ -783,6 +784,11 @@ async def generate_dataset_artifact_job(ctx: Mapping[str, Any], job_id: str) -> 
     await _run_blocking_job(_generate_dataset_artifact_job, ctx, job_id)
 
 
+async def augment_dataset_job(ctx: Mapping[str, Any], job_id: str) -> None:
+    """在既有 worker 中推进增强；恢复投递不授权重发非幂等上游操作。"""
+    await _run_blocking_job(_generate_dataset_artifact_job, ctx, job_id)
+
+
 async def dispatch_ddm_training_job(ctx: Mapping[str, Any], job_id: str) -> None:
     """隔离同步 DDM 训练命令推进，不阻塞 ARQ 事件循环。"""
     await _run_blocking_job(_dispatch_ddm_training_job, ctx, job_id)
@@ -856,6 +862,7 @@ def _dispatch_training_job(
                 job_id=running.id,
                 expected_updated_at=running.updated_at,
                 now=datetime.now(UTC),
+                job_type=job_type,
             ):
                 session.rollback()
                 return
@@ -901,12 +908,32 @@ def _generate_dataset_artifact_job(
     def commit_transaction(session: object) -> bool:
         return _commit_if_active(cast(Session, session), fence)
 
-    _artifact_executor(ctx).execute(
+    executor = (
+        cast(DatasetCommandExecutor, ctx["augmentation_executor"])
+        if running.job_type is JobType.DATASET_AUGMENTATION
+        else _artifact_executor(ctx)
+    )
+    result = executor.execute(
         job=running,
         finish_job=finish_job,
         commit_transaction=commit_transaction,
         resolve_current_caller=_current_caller_resolver(ctx),
     )
+    if (
+        running.job_type is JobType.DATASET_AUGMENTATION
+        and result.outcome is ArtifactExecutionOutcome.RETRY_PENDING
+        and not fence.cancelled
+    ):
+        with factory() as session:
+            if not PostgresJobRepository(session).defer_command_poll(
+                job_id=running.id,
+                expected_updated_at=running.updated_at,
+                now=datetime.now(UTC),
+                job_type=running.job_type,
+            ):
+                session.rollback()
+                return
+            _commit_if_active(session, fence)
 
 
 async def prepare_annotation_context_job(ctx: Mapping[str, Any], job_id: str) -> None:
@@ -1682,7 +1709,9 @@ async def dispatch_pending_jobs(ctx: Mapping[str, Any]) -> None:
         session.commit()
     with factory() as session:
         pending = PostgresJobRepository(session).pending(
-            limit=100, configured_training_types=dispatcher.configured_training_types
+            limit=100,
+            configured_training_types=dispatcher.configured_training_types,
+            include_augmentation=dispatcher.augmentation_configured,
         )
     for job in pending:
         await dispatcher.dispatch_async(job.id)
@@ -1712,6 +1741,7 @@ def build_worker(
     annotation_runtime: DatasetAnnotationRuntime,
     training_executors: Mapping[JobType, TrainingJobExecutor],
     current_caller_resolver: CurrentCallerResolver,
+    augmentation_executor: DatasetCommandExecutor | None = None,
     retention_sweep: Callable[[], None] | None = None,
 ) -> Worker:
     """构造带数据库、Redis 和显式数据集运行时的 worker。"""
@@ -1725,7 +1755,8 @@ def build_worker(
             annotate_dataset_job,
             dispatch_ddm_training_job,
             dispatch_vlm_training_job,
-        ],
+        ]
+        + ([augment_dataset_job] if augmentation_executor is not None else []),
         cron_jobs=[
             cron(
                 dispatch_pending_jobs,
@@ -1758,6 +1789,7 @@ def build_worker(
             "artifact_executor": artifact_executor,
             "annotation_runtime": annotation_runtime,
             "training_executors": dict(training_executors),
+            "augmentation_executor": augmentation_executor,
             "current_caller_resolver": current_caller_resolver,
             "retention_sweep": retention_sweep,
             "retention_sweep_lock": asyncio.Lock(),
@@ -1827,6 +1859,10 @@ def run_worker(
     ddm_executor_factory: Callable[[Settings, sessionmaker[Session]], TrainingJobExecutor],
     vlm_executor_factory: Callable[[Settings, sessionmaker[Session]], TrainingJobExecutor],
     current_caller_resolver_factory: Callable[[sessionmaker[Session]], CurrentCallerResolver],
+    augmentation_executor_factory: Callable[
+        [Settings, sessionmaker[Session]], DatasetCommandExecutor | None
+    ]
+    | None = None,
     retention_sweep_factory: Callable[[Settings, sessionmaker[Session]], Callable[[], None]]
     | None = None,
 ) -> None:
@@ -1856,6 +1892,11 @@ def run_worker(
         artifact_executor=artifact_executor,
         annotation_runtime=annotation_runtime,
         training_executors=training_executors,
+        augmentation_executor=(
+            augmentation_executor_factory(settings, factory)
+            if augmentation_executor_factory is not None
+            else None
+        ),
         current_caller_resolver=current_caller_resolver,
         retention_sweep=retention_sweep,
     )

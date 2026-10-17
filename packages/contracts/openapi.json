@@ -1017,6 +1017,227 @@
         "title": "AssignedRoles",
         "type": "object"
       },
+      "AugmentationStatus": {
+        "description": "unknown/bound 持续占用不安全输入；只有已证实终结才能释放。",
+        "enum": [
+          "pending",
+          "result_unknown",
+          "bound",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "AugmentationStatus",
+        "type": "string"
+      },
+      "AugmentationView": {
+        "description": "公开状态与来源摘要；内部冻结载荷、共享卷清单和对象键留在 dataset。",
+        "properties": {
+          "annotation_execution_id": {
+            "format": "uuid",
+            "title": "Annotation Execution Id",
+            "type": "string"
+          },
+          "base_augmentation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Augmentation Id"
+          },
+          "base_progress": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Progress"
+          },
+          "base_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Status"
+          },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At"
+          },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled By"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "dataset_id": {
+            "format": "uuid",
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatched At"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "frame_drop_iterations": {
+            "title": "Frame Drop Iterations",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_source": {
+            "title": "Input Source",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "last_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Observed At"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          },
+          "result_failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Failure Code"
+          },
+          "result_file_count": {
+            "title": "Result File Count",
+            "type": "integer"
+          },
+          "result_status": {
+            "enum": [
+              "not_registered",
+              "registered"
+            ],
+            "title": "Result Status",
+            "type": "string"
+          },
+          "result_total_bytes": {
+            "title": "Result Total Bytes",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AugmentationStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dataset_id",
+          "annotation_execution_id",
+          "job_id",
+          "frame_drop_iterations",
+          "input_source",
+          "original_filename",
+          "status",
+          "dispatched_at",
+          "base_augmentation_id",
+          "base_status",
+          "base_progress",
+          "last_observed_at",
+          "failure_code",
+          "result_status",
+          "result_file_count",
+          "result_total_bytes",
+          "result_failure_code",
+          "cancelled_by",
+          "cancelled_at",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AugmentationView",
+        "type": "object"
+      },
       "BackendConfigurationStatusView": {
         "properties": {
           "backend_id": {
@@ -4962,6 +5183,40 @@
         "title": "ItemPage[ArtifactView]",
         "type": "object"
       },
+      "ItemPage_AugmentationView_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AugmentationView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "ItemPage[AugmentationView]",
+        "type": "object"
+      },
       "ItemPage_CameraMediaView_": {
         "properties": {
           "items": {
@@ -6593,6 +6848,29 @@
           "media"
         ],
         "title": "RegisterVlmCandidateInput",
+        "type": "object"
+      },
+      "RequestAugmentationInput": {
+        "additionalProperties": false,
+        "description": "只接受已登记标注执行身份，不接受客户端路径、URL 或基座身份。",
+        "properties": {
+          "annotation_execution_id": {
+            "format": "uuid",
+            "title": "Annotation Execution Id",
+            "type": "string"
+          },
+          "frame_drop_iterations": {
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Frame Drop Iterations",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "annotation_execution_id",
+          "frame_drop_iterations"
+        ],
+        "title": "RequestAugmentationInput",
         "type": "object"
       },
       "RequestDdmTrainingCommandInput": {
@@ -23304,6 +23582,442 @@
           "dataset"
         ],
         "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/augmentation-commands": {
+      "get": {
+        "operationId": "listDatasetAugmentations",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemPage_AugmentationView_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集或增强命令不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "输入、幂等键或命令状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "List Dataset Augmentations",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      },
+      "post": {
+        "operationId": "requestDatasetAugmentation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestAugmentationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AugmentationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集或增强命令不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "输入、幂等键或命令状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Request Dataset Augmentation",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}": {
+      "get": {
+        "operationId": "readDatasetAugmentation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AugmentationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集或增强命令不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "输入、幂等键或命令状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Read Dataset Augmentation",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.view"
+      }
+    },
+    "/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}/cancel": {
+      "post": {
+        "operationId": "cancelPendingDatasetAugmentation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Dataset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AugmentationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "需要认证或会话无效"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "权限不足或 CSRF 校验失败"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "训练数据集或增强命令不存在"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "输入、幂等键或命令状态冲突"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "请求无效"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDocument"
+                }
+              }
+            },
+            "description": "Internal server error"
+          }
+        },
+        "summary": "Cancel Pending Dataset Augmentation",
+        "tags": [
+          "dataset"
+        ],
+        "x-required-permission": "dataset.dataset.edit"
       }
     },
     "/api/v1/training-datasets/{dataset_id}/ddm-training-commands": {

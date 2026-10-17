@@ -35,6 +35,7 @@ def read_job(
             | JobType.DATASET_ARTIFACT
             | JobType.DATASET_DDM_TRAINING
             | JobType.DATASET_VLM_TRAINING
+            | JobType.DATASET_AUGMENTATION
         ):
             authorize(caller, Permission.DATASET_VIEW)
         case _:

@@ -17,6 +17,7 @@ from factory_sop.dataset.adapters.tables import (
     AnnotationContextRow,
     AnnotationExecutionRow,
     AnnotationSubmissionRow,
+    AugmentationCommandRow,
     DatasetArtifactRow,
     DatasetMemberRow,
     TrainingCommandRow,
@@ -30,6 +31,8 @@ from factory_sop.dataset.model import (
     AnnotationContext,
     AnnotationExecution,
     AnnotationSubmission,
+    AugmentationCommand,
+    AugmentationStatus,
     DatasetArtifact,
     DatasetMember,
     TrainingCommand,
@@ -544,6 +547,120 @@ class PostgresDatasetRepository:
             ),
         )
         return result.rowcount == 1
+
+    def add_augmentation(self, value: AugmentationCommand) -> bool:
+        try:
+            with self._session.begin_nested():
+                self._session.add(AugmentationCommandRow.from_domain(value))
+                self._session.flush()
+        except IntegrityError:
+            if self.augmentation_by_key(value.dataset_id, value.idempotency_key) is None:
+                raise
+            return False
+        return True
+
+    def augmentation_by_key(self, dataset_id: UUID, key: str) -> AugmentationCommand | None:
+        row = self._session.scalar(
+            select(AugmentationCommandRow).where(
+                AugmentationCommandRow.dataset_id == dataset_id,
+                AugmentationCommandRow.idempotency_key == key,
+            )
+        )
+        return None if row is None else row.to_domain()
+
+    def augmentation_by_id(self, command_id: UUID) -> AugmentationCommand | None:
+        row = self._session.get(AugmentationCommandRow, command_id, populate_existing=True)
+        return None if row is None else row.to_domain()
+
+    def list_augmentations(self, dataset_id: UUID) -> Sequence[AugmentationCommand]:
+        rows = self._session.scalars(
+            select(AugmentationCommandRow)
+            .where(AugmentationCommandRow.dataset_id == dataset_id)
+            .order_by(AugmentationCommandRow.created_at, AugmentationCommandRow.id)
+        ).all()
+        return [row.to_domain() for row in rows]
+
+    def save_augmentation(self, value: AugmentationCommand, *, expected_version: int) -> bool:
+        """只更新可变事实；首次输入、派发目标与意图时刻不在此写入。"""
+        result = self._session.execute(
+            update(AugmentationCommandRow)
+            .where(
+                AugmentationCommandRow.id == value.id,
+                AugmentationCommandRow.version == expected_version,
+                or_(
+                    AugmentationCommandRow.base_augmentation_id.is_(None),
+                    AugmentationCommandRow.base_augmentation_id == value.base_augmentation_id,
+                ),
+            )
+            .values(
+                status=value.status.value,
+                job_id=value.job_id,
+                version=value.version,
+                base_augmentation_id=value.base_augmentation_id,
+                base_observation=dict(value.base_observation),
+                last_observed_at=value.last_observed_at,
+                failure_code=value.failure_code,
+                result_status=value.result_status,
+                result_manifest=dict(value.result_manifest),
+                result_failure_code=value.result_failure_code,
+                updated_at=value.updated_at,
+            )
+        )
+        return cast("CursorResult[Any]", result).rowcount == 1
+
+    def begin_augmentation_dispatch(
+        self,
+        *,
+        command_id: UUID,
+        backend_target: str,
+        now: datetime,
+        input_files: list[dict[str, Any]],
+    ) -> AugmentationCommand | None:
+        """PG 部分唯一索引持久占用 target/label；过期租约和进程死亡不释放。"""
+        try:
+            with self._session.begin_nested():
+                result = self._session.execute(
+                    update(AugmentationCommandRow)
+                    .where(
+                        AugmentationCommandRow.id == command_id,
+                        AugmentationCommandRow.status == AugmentationStatus.PENDING.value,
+                    )
+                    .values(
+                        status=AugmentationStatus.RESULT_UNKNOWN.value,
+                        backend_target=backend_target,
+                        dispatched_at=now,
+                        updated_at=now,
+                        version=AugmentationCommandRow.version + 1,
+                        failure_code="DISPATCH_RESULT_UNVERIFIED",
+                        result_manifest={"input_files": input_files},
+                    )
+                )
+        except IntegrityError:
+            return None
+        return (
+            self.augmentation_by_id(command_id)
+            if cast("CursorResult[Any]", result).rowcount
+            else None
+        )
+
+    def cancel_pending_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, actor_id: UUID, now: datetime
+    ) -> None:
+        self._session.execute(
+            update(AugmentationCommandRow)
+            .where(
+                AugmentationCommandRow.id == command_id,
+                AugmentationCommandRow.dataset_id == dataset_id,
+                AugmentationCommandRow.status == AugmentationStatus.PENDING.value,
+            )
+            .values(
+                status=AugmentationStatus.CANCELLED.value,
+                cancelled_by=actor_id,
+                cancelled_at=now,
+                updated_at=now,
+                version=AugmentationCommandRow.version + 1,
+            )
+        )
 
     def add_training_command(self, value: TrainingCommand) -> bool:
         """按数据集与服务范围的幂等键追加训练命令；并发占用同一键时不覆盖已存在命令。"""

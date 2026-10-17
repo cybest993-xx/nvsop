@@ -668,6 +668,111 @@ export type AssignedRoles = {
 }
 
 /**
+ * AugmentationStatus
+ *
+ * unknown/bound 持续占用不安全输入；只有已证实终结才能释放。
+ */
+export type AugmentationStatus =
+  'pending' | 'result_unknown' | 'bound' | 'completed' | 'failed' | 'cancelled'
+
+/**
+ * AugmentationView
+ *
+ * 公开状态与来源摘要；内部冻结载荷、共享卷清单和对象键留在 dataset。
+ */
+export type AugmentationView = {
+  /**
+   * Annotation Execution Id
+   */
+  annotation_execution_id: string
+  /**
+   * Base Augmentation Id
+   */
+  base_augmentation_id: string | null
+  /**
+   * Base Progress
+   */
+  base_progress: number | null
+  /**
+   * Base Status
+   */
+  base_status: string | null
+  /**
+   * Cancelled At
+   */
+  cancelled_at: string | null
+  /**
+   * Cancelled By
+   */
+  cancelled_by: string | null
+  /**
+   * Created At
+   */
+  created_at: string
+  /**
+   * Created By
+   */
+  created_by: string
+  /**
+   * Dataset Id
+   */
+  dataset_id: string
+  /**
+   * Dispatched At
+   */
+  dispatched_at: string | null
+  /**
+   * Failure Code
+   */
+  failure_code: string | null
+  /**
+   * Frame Drop Iterations
+   */
+  frame_drop_iterations: number
+  /**
+   * Id
+   */
+  id: string
+  /**
+   * Input Source
+   */
+  input_source: string
+  /**
+   * Job Id
+   */
+  job_id: string | null
+  /**
+   * Last Observed At
+   */
+  last_observed_at: string | null
+  /**
+   * Original Filename
+   */
+  original_filename: string
+  /**
+   * Result Failure Code
+   */
+  result_failure_code: string | null
+  /**
+   * Result File Count
+   */
+  result_file_count: number
+  /**
+   * Result Status
+   */
+  result_status: 'not_registered' | 'registered'
+  /**
+   * Result Total Bytes
+   */
+  result_total_bytes: number
+  status: AugmentationStatus
+  /**
+   * Updated At
+   */
+  updated_at: string
+}
+
+/**
  * BackendConfigurationStatusView
  */
 export type BackendConfigurationStatusView = {
@@ -2936,6 +3041,28 @@ export type ItemPageArtifactView = {
 }
 
 /**
+ * ItemPage[AugmentationView]
+ */
+export type ItemPageAugmentationView = {
+  /**
+   * Items
+   */
+  items: Array<AugmentationView>
+  /**
+   * Page
+   */
+  page: number
+  /**
+   * Page Size
+   */
+  page_size: number
+  /**
+   * Total
+   */
+  total: number
+}
+
+/**
  * ItemPage[CameraMediaView]
  */
 export type ItemPageCameraMediaView = {
@@ -3895,6 +4022,22 @@ export type RegisterVlmCandidateInput = {
   records: Array<{
     [key: string]: unknown
   }>
+}
+
+/**
+ * RequestAugmentationInput
+ *
+ * 只接受已登记标注执行身份，不接受客户端路径、URL 或基座身份。
+ */
+export type RequestAugmentationInput = {
+  /**
+   * Annotation Execution Id
+   */
+  annotation_execution_id: string
+  /**
+   * Frame Drop Iterations
+   */
+  frame_drop_iterations: number
 }
 
 /**
@@ -12686,6 +12829,237 @@ export type DownloadDatasetArtifactResponses = {
 
 export type DownloadDatasetArtifactResponse =
   DownloadDatasetArtifactResponses[keyof DownloadDatasetArtifactResponses]
+
+export type ListDatasetAugmentationsData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: {
+    /**
+     * Page
+     */
+    page?: number
+    /**
+     * Page Size
+     */
+    page_size?: number
+  }
+  url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands'
+}
+
+export type ListDatasetAugmentationsErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集或增强命令不存在
+   */
+  404: ProblemDocument
+  /**
+   * 输入、幂等键或命令状态冲突
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ListDatasetAugmentationsError =
+  ListDatasetAugmentationsErrors[keyof ListDatasetAugmentationsErrors]
+
+export type ListDatasetAugmentationsResponses = {
+  /**
+   * Successful Response
+   */
+  200: ItemPageAugmentationView
+}
+
+export type ListDatasetAugmentationsResponse =
+  ListDatasetAugmentationsResponses[keyof ListDatasetAugmentationsResponses]
+
+export type RequestDatasetAugmentationData = {
+  body: RequestAugmentationInput
+  headers: {
+    /**
+     * Idempotency-Key
+     */
+    'Idempotency-Key': string
+  }
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands'
+}
+
+export type RequestDatasetAugmentationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集或增强命令不存在
+   */
+  404: ProblemDocument
+  /**
+   * 输入、幂等键或命令状态冲突
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type RequestDatasetAugmentationError =
+  RequestDatasetAugmentationErrors[keyof RequestDatasetAugmentationErrors]
+
+export type RequestDatasetAugmentationResponses = {
+  /**
+   * Successful Response
+   */
+  202: AugmentationView
+}
+
+export type RequestDatasetAugmentationResponse =
+  RequestDatasetAugmentationResponses[keyof RequestDatasetAugmentationResponses]
+
+export type ReadDatasetAugmentationData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}'
+}
+
+export type ReadDatasetAugmentationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集或增强命令不存在
+   */
+  404: ProblemDocument
+  /**
+   * 输入、幂等键或命令状态冲突
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type ReadDatasetAugmentationError =
+  ReadDatasetAugmentationErrors[keyof ReadDatasetAugmentationErrors]
+
+export type ReadDatasetAugmentationResponses = {
+  /**
+   * Successful Response
+   */
+  200: AugmentationView
+}
+
+export type ReadDatasetAugmentationResponse =
+  ReadDatasetAugmentationResponses[keyof ReadDatasetAugmentationResponses]
+
+export type CancelPendingDatasetAugmentationData = {
+  body?: never
+  path: {
+    /**
+     * Dataset Id
+     */
+    dataset_id: string
+    /**
+     * Command Id
+     */
+    command_id: string
+  }
+  query?: never
+  url: '/api/v1/training-datasets/{dataset_id}/augmentation-commands/{command_id}/cancel'
+}
+
+export type CancelPendingDatasetAugmentationErrors = {
+  /**
+   * 需要认证或会话无效
+   */
+  401: ProblemDocument
+  /**
+   * 权限不足或 CSRF 校验失败
+   */
+  403: ProblemDocument
+  /**
+   * 训练数据集或增强命令不存在
+   */
+  404: ProblemDocument
+  /**
+   * 输入、幂等键或命令状态冲突
+   */
+  409: ProblemDocument
+  /**
+   * 请求无效
+   */
+  422: ProblemDocument
+  /**
+   * Internal server error
+   */
+  500: ProblemDocument
+}
+
+export type CancelPendingDatasetAugmentationError =
+  CancelPendingDatasetAugmentationErrors[keyof CancelPendingDatasetAugmentationErrors]
+
+export type CancelPendingDatasetAugmentationResponses = {
+  /**
+   * Successful Response
+   */
+  200: AugmentationView
+}
+
+export type CancelPendingDatasetAugmentationResponse =
+  CancelPendingDatasetAugmentationResponses[keyof CancelPendingDatasetAugmentationResponses]
 
 export type ListDdmTrainingCommandsData = {
   body?: never

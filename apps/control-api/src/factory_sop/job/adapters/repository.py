@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, case, or_, select, update
+from sqlalchemy import CursorResult, case, or_, select, true, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DatabaseSession
 
@@ -256,6 +256,18 @@ class PostgresJobRepository:
         self._remember_for_dispatch(candidate.id)
         return candidate
 
+    def get_or_create_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        """命令与任务稳定幂等，失败不能触发再次增强。"""
+        return self._get_or_create_dataset_task(
+            dataset_id=dataset_id,
+            resource_id=command_id,
+            job_type=JobType.DATASET_AUGMENTATION,
+            now=now,
+            reopen_failed=False,
+        )
+
     def _get_or_create_dataset_task(
         self,
         *,
@@ -263,10 +275,11 @@ class PostgresJobRepository:
         resource_id: UUID,
         job_type: JobType,
         now: datetime,
+        reopen_failed: bool = True,
     ) -> ApplicationJob:
         existing = self._by_attempt_type(attempt_id=resource_id, job_type=job_type)
         if existing is not None:
-            if existing.status == JobStatus.FAILED:
+            if reopen_failed and existing.status == JobStatus.FAILED:
                 existing = self._reopen_failed(existing, now=now)
             self._remember_for_dispatch(existing.id)
             return existing
@@ -482,16 +495,27 @@ class PostgresJobRepository:
         return result.rowcount == 1
 
     def defer_training_poll(
-        self, *, job_id: UUID, expected_updated_at: datetime, now: datetime
+        self, *, job_id: UUID, expected_updated_at: datetime, now: datetime, job_type: JobType
     ) -> bool:
         """原任务观测未终结：归还当前租约，下一 outbox 扫描只查询同一命令。"""
+        return self.defer_command_poll(
+            job_id=job_id,
+            expected_updated_at=expected_updated_at,
+            now=now,
+            job_type=job_type,
+        )
+
+    def defer_command_poll(
+        self, *, job_id: UUID, expected_updated_at: datetime, now: datetime, job_type: JobType
+    ) -> bool:
+        """归还当前命令执行租约；下次投递不代表允许重发上游操作。"""
         result = cast(
             "CursorResult[Any]",
             self._session.execute(
                 update(ApplicationJobRow)
                 .where(
                     ApplicationJobRow.id == job_id,
-                    ApplicationJobRow.job_type.in_(_TRAINING_JOB_TYPE_VALUES),
+                    ApplicationJobRow.job_type == job_type.value,
                     ApplicationJobRow.status == JobStatus.RUNNING.value,
                     ApplicationJobRow.updated_at == expected_updated_at,
                 )
@@ -505,6 +529,7 @@ class PostgresJobRepository:
         *,
         limit: int,
         configured_training_types: frozenset[JobType] = frozenset(),
+        include_augmentation: bool = False,
     ) -> list[ApplicationJob]:
         # held 类型（训练命令）由已知派发放行策略保留为 pending；扫描器在 ORDER/LIMIT 之前
         # 排除未配置基座的训练任务，避免大量 held 行占满窗口并饿死后面可执行的任务。
@@ -523,6 +548,11 @@ class PostgresJobRepository:
                         tuple(job_type.value for job_type in configured_training_types)
                     ),
                 )
+            )
+            .where(
+                true()
+                if include_augmentation
+                else ApplicationJobRow.job_type != JobType.DATASET_AUGMENTATION.value
             )
             .order_by(ApplicationJobRow.created_at, ApplicationJobRow.id)
             .limit(limit)
@@ -597,6 +627,15 @@ class PostgresUsageJobQueue:
     ) -> ApplicationJob:
         return self._repository.get_or_create_training(
             job_type=job_type,
+            dataset_id=dataset_id,
+            command_id=command_id,
+            now=now,
+        )
+
+    def get_or_create_augmentation(
+        self, *, dataset_id: UUID, command_id: UUID, now: datetime
+    ) -> ApplicationJob:
+        return self._repository.get_or_create_augmentation(
             dataset_id=dataset_id,
             command_id=command_id,
             now=now,

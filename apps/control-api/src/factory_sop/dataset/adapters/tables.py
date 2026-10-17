@@ -32,6 +32,8 @@ from factory_sop.dataset.model import (
     AnnotationSegment,
     AnnotationSubmission,
     ArtifactStatus,
+    AugmentationCommand,
+    AugmentationStatus,
     DatasetArtifact,
     DatasetMember,
     TrainingCommand,
@@ -860,4 +862,108 @@ class TrainingCommandRow(Table):
             if value.cancel_response is not None
             else None,
             cancel_detail=value.cancel_detail,
+        )
+
+
+class AugmentationCommandRow(Table):
+    """增强首次输入与独立登记事实；在途唯一性由 PG 而非 worker 生命周期维护。"""
+
+    __tablename__ = "dataset_augmentation_command"
+    __table_args__ = (
+        Index("ix_dataset_augmentation_command_dataset_id", "dataset_id"),
+        UniqueConstraint("dataset_id", "idempotency_key", name="uq_augmentation_request"),
+        UniqueConstraint("backend_target", "base_augmentation_id", name="uq_augmentation_base"),
+        Index(
+            "uq_augmentation_inflight",
+            "backend_target",
+            "label_data_id",
+            unique=True,
+            postgresql_where=text("status IN ('result_unknown', 'bound')"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(), primary_key=True)
+    dataset_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dataset_training_dataset.id", ondelete="CASCADE")
+    )
+    annotation_execution_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dataset_annotation_execution.id")
+    )
+    label_data_id: Mapped[str] = mapped_column(String(255))
+    idempotency_key: Mapped[str] = mapped_column(String(255))
+    frame_drop_iterations: Mapped[int] = mapped_column(Integer())
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    created_by: Mapped[UUID] = mapped_column(Uuid())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(32))
+    job_id: Mapped[UUID | None] = mapped_column(Uuid())
+    version: Mapped[int] = mapped_column(Integer())
+    backend_target: Mapped[str | None] = mapped_column(String(2048))
+    base_augmentation_id: Mapped[str | None] = mapped_column(String(255))
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    base_observation: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    last_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_code: Mapped[str | None] = mapped_column(String(255))
+    result_status: Mapped[str] = mapped_column(String(32))
+    result_manifest: Mapped[dict[str, Any]] = mapped_column(JSONB())
+    result_failure_code: Mapped[str | None] = mapped_column(String(255))
+    cancelled_by: Mapped[UUID | None] = mapped_column(Uuid())
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def to_domain(self) -> AugmentationCommand:
+        return AugmentationCommand(
+            id=self.id,
+            dataset_id=self.dataset_id,
+            annotation_execution_id=self.annotation_execution_id,
+            label_data_id=self.label_data_id,
+            idempotency_key=self.idempotency_key,
+            frame_drop_iterations=self.frame_drop_iterations,
+            input_snapshot=self.input_snapshot,
+            created_by=self.created_by,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            status=AugmentationStatus(self.status),
+            job_id=self.job_id,
+            version=self.version,
+            backend_target=self.backend_target,
+            base_augmentation_id=self.base_augmentation_id,
+            dispatched_at=self.dispatched_at,
+            base_observation=self.base_observation,
+            last_observed_at=self.last_observed_at,
+            failure_code=self.failure_code,
+            result_status=self.result_status,
+            result_manifest=self.result_manifest,
+            result_failure_code=self.result_failure_code,
+            cancelled_by=self.cancelled_by,
+            cancelled_at=self.cancelled_at,
+        )
+
+    @classmethod
+    def from_domain(cls, value: AugmentationCommand) -> AugmentationCommandRow:
+        return cls(
+            id=value.id,
+            dataset_id=value.dataset_id,
+            annotation_execution_id=value.annotation_execution_id,
+            label_data_id=value.label_data_id,
+            idempotency_key=value.idempotency_key,
+            frame_drop_iterations=value.frame_drop_iterations,
+            input_snapshot=dict(value.input_snapshot),
+            created_by=value.created_by,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+            status=value.status.value,
+            job_id=value.job_id,
+            version=value.version,
+            backend_target=value.backend_target,
+            base_augmentation_id=value.base_augmentation_id,
+            dispatched_at=value.dispatched_at,
+            base_observation=dict(value.base_observation),
+            last_observed_at=value.last_observed_at,
+            failure_code=value.failure_code,
+            result_status=value.result_status,
+            result_manifest=dict(value.result_manifest),
+            result_failure_code=value.result_failure_code,
+            cancelled_by=value.cancelled_by,
+            cancelled_at=value.cancelled_at,
         )

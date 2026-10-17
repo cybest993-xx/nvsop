@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import OperationalError
@@ -39,6 +41,19 @@ def an_account(*, login_name: str) -> User:
 
 def a_caller(user: User) -> Caller:
     return Caller(user=user, granted=frozenset({Permission.USER_EDIT}))
+
+
+@pytest.fixture(autouse=True)
+def _clean_committed_auth_state(engine: Engine) -> Iterator[None]:
+    """本文件提交真实账户与角色；结束后按套件约定清空，不依赖其他文件顺带清理。
+
+    覆盖本文件实际写入的表：TRUNCATE auth_user CASCADE 带走 auth_session 与
+    auth_user_role（外键级联），system_administrator 角色单独删除。
+    """
+    yield
+    with engine.begin() as connection:
+        connection.execute(text("TRUNCATE auth_user CASCADE"))
+        connection.execute(text("DELETE FROM auth_role WHERE code = 'system_administrator'"))
 
 
 def test_concurrent_deactivations_cannot_both_pass_the_guard(engine: Engine) -> None:

@@ -46,7 +46,7 @@ Fixtures are minimal, deterministic, synthetic or sanitized with provenance. Cus
 
 ### Stable commands
 
-Inspect [Makefile](../../Makefile) for prerequisites and constituent checks; it is the one local/CI interface. Frozen `uv.lock`/`pnpm-lock.yaml` own resolution. `make check` installs/generates before its internal parallel stage; `check-suite` is not an alternative final gate. `CHECK_JOBS=1` constrains a host. Clear test-selection overrides for final gates; retain actual command, environment, base/candidate and results. Reuse still-valid evidence instead of rerunning unrelated suites.
+Inspect [Makefile](../../Makefile) for prerequisites and constituent checks; it is the one local/CI interface. Frozen `uv.lock`/`pnpm-lock.yaml` own resolution. `make check` installs/generates before its internal parallel stage; `check-suite` is not an alternative final gate. `CHECK_JOBS` and `PYTEST_WORKERS` (`auto` by default; `0` runs in-process) constrain a busy host, and `CHECK_JOBS_MAX`/`PYTEST_WORKERS_MAX` cap both at `4` so a mis-set value cannot overwhelm the machine. Gates contend for the whole host: before a full gate check `pgrep -af "make check"`, or serialize it with `flock /tmp/nvsop-gate.lock make check`. Treat a failure under concurrent load as suspect until it reproduces on an idle host. Clear test-selection overrides for final gates; retain actual command, environment, base/candidate and results. Reuse still-valid evidence instead of rerunning unrelated suites.
 
 | Entry | Purpose |
 |---|---|

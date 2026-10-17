@@ -140,7 +140,9 @@ def test_legacy_listener_wiring_exhausts_business_pool_for_real_http_queries(
             _wait_for_listeners(engine, 2)
             started = time.monotonic()
             assert client.get("/api/v1/monitor/violations").status_code == 500
-            assert time.monotonic() - started < 1
+            # 并行 worker 负载下客户端与调度延迟会放大（实测约 1.7s），预算放宽到 5s；
+            # 仍远小于挂起路径的 20s 客户端超时，连接被 LISTEN 占死的回归依然会失败。
+            assert time.monotonic() - started < 5
         finally:
             for source in sources:
                 source.close()

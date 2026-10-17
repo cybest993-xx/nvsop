@@ -21,10 +21,21 @@ export UV_PROJECT_ENVIRONMENT UV_CACHE_DIR
 export PYTHONDONTWRITEBYTECODE := 1
 export RUFF_CACHE_DIR := $(LOCAL_CACHE)/ruff
 CHECK_JOBS ?= 2
+# 并发硬上限：无论调用方把 CHECK_JOBS/PYTEST_WORKERS 设成多大，实际并发都不超过上限，
+# 避免误设的并行把主机压死；整机并发上界为两者上限之积（默认 2×4，误设最多 4×4）。
+# 需要更大并发时显式提高对应的 *_MAX。
+CHECK_JOBS_MAX ?= 4
+PYTEST_WORKERS_MAX ?= 4
+# pytest 并行：默认按核数分发 worker；容器/网关套件按文件分组（--dist loadfile），
+# 让同一文件的固定端口与模块级夹具留在同一 worker。0 表示进程内串行。
+PYTEST_WORKERS ?= auto
+# CHECK_JOBS 的 0 映射为 1：make --jobs=0 表示不限并发，与 pytest 的 -n 0 语义相反。
+CHECK_JOBS_EFFECTIVE = $(shell python3 scripts/concurrency_limit.py CHECK_JOBS "$(if $(filter 0,$(CHECK_JOBS)),1,$(CHECK_JOBS))" "$(CHECK_JOBS_MAX)")
+PYTEST_WORKERS_EFFECTIVE = $(shell python3 scripts/concurrency_limit.py PYTEST_WORKERS "$(PYTEST_WORKERS)" "$(PYTEST_WORKERS_MAX)")
 
 # 安装与生成先完成，再由同一个 Make jobserver 限制检查并发。
 check: sync hooks contracts
-	+$(MAKE) --jobs=$(CHECK_JOBS) --output-sync=target check-suite
+	+$(MAKE) --jobs=$(CHECK_JOBS_EFFECTIVE) --output-sync=target check-suite
 
 # check 的内部执行阶段；单项检查继续保留自己的最小入口。
 check-suite: policy-test policy migrations contract-base contract-capability \
@@ -76,7 +87,7 @@ task-abandon:
 
 # 两个 pytest 会话分别拥有容器和缓存，不在同一数据库上并发清表。
 check-integration: sync
-	+$(MAKE) --jobs=$(CHECK_JOBS) --output-sync=target center-integration center-system
+	+$(MAKE) --jobs=$(CHECK_JOBS_EFFECTIVE) --output-sync=target center-integration center-system
 
 # 固定 digest 的真实 MediaMTX 录像/回放证据；夹具使用独立 Compose project 并在结束时清理。
 media-system: sync
@@ -245,13 +256,17 @@ center-type:
 	MYPYPATH="$(CENTER)/src" $(MYPY) --cache-dir "$(LOCAL_CACHE)/mypy/$@" $(CENTER)/src $(CENTER)/tests
 
 center-unit:
-	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/unit -q
+	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/unit -q -n $(PYTEST_WORKERS_EFFECTIVE)
 
+# 并行前提：提交真实状态的测试文件自带清理（如 test_auth_administration_lock 的 autouse
+# 夹具），文件分组后不再依赖其他文件的夹具顺带清库。
 center-integration:
-	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/integration -q
+	cd $(CENTER) && PYTHONPATH=src $(PYTEST) tests/integration -q -n $(PYTEST_WORKERS_EFFECTIVE) --dist loadfile
 
+# 并行前提：端口由 _free_port 按 xdist worker 分配互不相交的端口段，避免「探测后关闭」
+# 的跨 worker 踩踏（另一个 worker 的网关会应答存活探测，请求被转发到错误的 app）。
 center-system:
-	PYTHONPATH="$(CENTER)/src:$(EDGE)/src:$(CONTRACT_PY)/src" $(PYTEST) tests/system -q
+	PYTHONPATH="$(CENTER)/src:$(EDGE)/src:$(CONTRACT_PY)/src" $(PYTEST) tests/system -q -n $(PYTEST_WORKERS_EFFECTIVE) --dist loadfile
 
 EDGE := apps/edge-runtime
 

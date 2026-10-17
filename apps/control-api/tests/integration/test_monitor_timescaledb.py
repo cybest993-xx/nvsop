@@ -343,6 +343,8 @@ def migration(engine: Engine) -> Iterator[MigrationFixture]:
                 for index, event_id in enumerate(ids[kind])
             )
     command.upgrade(configuration, "head")
+    # 首个自动压缩运行必须先落地：它与测试体对事实表的写入会锁序死锁（并行 worker 下实测）。
+    _wait_for_native_compression_runs(upgraded)
     try:
         yield MigrationFixture(
             engine=upgraded, configuration=configuration, ids=ids, sequences=sequences

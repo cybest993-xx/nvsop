@@ -13,6 +13,8 @@ themselves, an empty `auth_user` and empty device tables for every scenario.
 from __future__ import annotations
 
 import io
+import itertools
+import os
 import socket
 import subprocess
 import sys
@@ -286,10 +288,33 @@ def tls_certificate(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pat
     return _make_tls_certificate(tmp_path_factory.mktemp("system-tls"))
 
 
+# 并行 worker 共享操作系统的临时端口池时，「探测后关闭」的分配在探测与真正绑定之间会
+# 相互踩踏：另一个 worker 的网关会应答存活探测，请求被转发到错误的 app。每个 worker
+# 因此使用互不相交的端口段；段内游标轮转，连续调用不会拿到同一个端口。
+_PORT_BASE = 23_000
+_PORT_SPAN = 200
+_PORT_CURSOR = itertools.count()
+
+
+def _worker_index() -> int:
+    """xdist worker 序号；串行运行时视为 0。"""
+    name = os.environ.get("PYTEST_XDIST_WORKER", "")
+    digits = "".join(character for character in name if character.isdigit())
+    return int(digits) if digits else 0
+
+
 def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind((SERVER_HOST, 0))
-        return int(listener.getsockname()[1])
+    """在本 worker 的专属端口段内探测一个空闲端口。"""
+    base = _PORT_BASE + _worker_index() * _PORT_SPAN
+    for _ in range(_PORT_SPAN):
+        candidate = base + next(_PORT_CURSOR) % _PORT_SPAN
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            try:
+                listener.bind((SERVER_HOST, candidate))
+            except OSError:
+                continue
+            return candidate
+    raise RuntimeError(f"worker 端口段 {base} 内没有空闲端口")
 
 
 def _read_text(path: Path) -> str:

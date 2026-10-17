@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, status
@@ -88,7 +88,8 @@ def _public_view(value: AugmentationCommand) -> AugmentationView:
         base_progress=value.base_observation.get("progress"),
         last_observed_at=value.last_observed_at,
         failure_code=value.failure_code,
-        result_status=value.result_status,
+        # 0075 中的 CHECK 约束仅允许这两个持久状态。
+        result_status=cast(Literal["not_registered", "registered"], value.result_status),
         result_file_count=len(files),
         result_total_bytes=sum(item["size"] for item in files),
         result_failure_code=value.result_failure_code,

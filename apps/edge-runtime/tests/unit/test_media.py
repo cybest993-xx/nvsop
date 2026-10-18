@@ -246,34 +246,39 @@ class MediaConfigurationTest(MediaFixture):
             self.configuration.recording_compression_backlog_threshold,
         )
         self.assertIsNone(self.configuration.recording_compression_backlog_recovery_threshold)
-        parsed = load_media_runtime_configuration(
-            {
-                "host_id": HOST_ID,
-                "host_status": "active",
-                "mediamtx_address": None,
-                "mediamtx_playback_address": None,
-                "recording_window_seconds": 3600,
-                "media_config_path": "/etc/nvsop/mediamtx.yml",
-                "recording_directory": "/var/lib/nvsop/recordings",
-                "mediamtx_binary": "/usr/local/bin/mediamtx",
-                "ffmpeg_binary": "/usr/bin/ffmpeg",
-                "rtsp_bind_address": ":8554",
-                "webrtc_bind_address": ":8889",
-                "webrtc_udp_bind_address": ":8189",
-                "playback_bind_address": ":9996",
-                "allow_origins": ["https://control.example.test"],
-                "record_segment_duration_seconds": 60,
-                "preview_release_delay_seconds": 5,
-                "startup_timeout_seconds": 2,
-                "transcode_threads": 2,
-                "recording_compression_enabled": True,
-                "recording_compression_backlog_threshold": 20,
-                "recording_compression_backlog_recovery_threshold": 5,
-                "cameras": [],
-            }
-        )
+        raw = {
+            "host_id": HOST_ID,
+            "host_status": "active",
+            "mediamtx_address": None,
+            "mediamtx_playback_address": None,
+            "recording_window_seconds": 3600,
+            "media_config_path": "/etc/nvsop/mediamtx.yml",
+            "recording_directory": "/var/lib/nvsop/recordings",
+            "mediamtx_binary": "/usr/local/bin/mediamtx",
+            "ffmpeg_binary": "/usr/bin/ffmpeg",
+            "rtsp_bind_address": ":8554",
+            "webrtc_bind_address": ":8889",
+            "webrtc_udp_bind_address": ":8189",
+            "playback_bind_address": ":9996",
+            "allow_origins": ["https://control.example.test"],
+            "record_segment_duration_seconds": 60,
+            "preview_release_delay_seconds": 5,
+            "startup_timeout_seconds": 2,
+            "transcode_threads": 2,
+            "recording_compression_enabled": True,
+            "recording_compression_backlog_threshold": 20,
+            "recording_compression_backlog_recovery_threshold": 5,
+            "cameras": [],
+        }
+        parsed = load_media_runtime_configuration(raw)
         self.assertEqual(20, parsed.recording_compression_backlog_threshold)
         self.assertEqual(5, parsed.recording_compression_backlog_recovery_threshold)
+        # 配置边界同样拒绝恢复阈值不小于阈值, 不只靠构造 MediaRuntime 兜底。
+        for invalid_recovery in (20, 25):
+            with self.assertRaises(ValueError):
+                load_media_runtime_configuration(
+                    {**raw, "recording_compression_backlog_recovery_threshold": invalid_recovery}
+                )
         for threshold in (0, -1, True, 1.5, "20"):
             with self.assertRaises(ValueError):
                 MediaRuntime(

@@ -54,7 +54,7 @@ check-docs: sync hooks
 	+$(MAKE) policy secret-scan
 	git diff --check "$(BASE)" $(if $(HEAD),"$(HEAD)") --
 
-# 轻量 hooks：提交时检查 trunk/vendor 与暂存 Python 格式；推送时拒绝 main。
+# 轻量 hooks：提交时检查 trunk/vendor 与暂存源码格式；推送时拒绝 main。
 # 完整验证属于 check/CI，不在 hooks 中重复运行。
 hooks:
 	git config core.hooksPath scripts/githooks

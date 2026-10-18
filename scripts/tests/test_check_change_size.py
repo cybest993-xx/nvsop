@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "check_change_size.py"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TRUSTED_MAKEFILE = REPO_ROOT / "Makefile"
 TRUSTED_CHECKER = REPO_ROOT / "scripts" / "check_change_size.py"
+# 调用方可能带着同名变量运行完整 gate（如 `make check HEAD=<sha>`），子 Make 会继承它们。
+GATE_VARIABLES = ("BASE", "HEAD", "MAKEFLAGS", "MFLAGS", "MAKELEVEL")
 
 
 class ChangeSizeReportTest(unittest.TestCase):
@@ -531,7 +535,15 @@ class TrustedTaskCheckEntryTest(unittest.TestCase):
             ["git", *args], cwd=root, check=True, capture_output=True, text=True
         ).stdout
 
-    def run_make(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def clean_environment(self, override: dict[str, str] | None = None) -> dict[str, str]:
+        environment = {
+            name: value for name, value in os.environ.items() if name not in GATE_VARIABLES
+        }
+        return environment | (override or {})
+
+    def run_make(
+        self, *args: str, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 "make",
@@ -545,6 +557,7 @@ class TrustedTaskCheckEntryTest(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            env=self.clean_environment(environment),
         )
 
     def test_supported_make_entry_runs_the_trusted_checker_on_the_candidate(self) -> None:
@@ -577,6 +590,25 @@ class TrustedTaskCheckEntryTest(unittest.TestCase):
         self.assertIn("Out-of-scope paths (1): scripts-old/outside.py", out_of_scope.stdout)
         self.assertNotIn("within-bounds", out_of_scope.stdout)
         self.assertNotIn("FORGED CHECKER RAN", out_of_scope.stdout + out_of_scope.stderr)
+
+    def test_inherited_gate_variables_do_not_change_the_result(self) -> None:
+        # 完整 gate 期间环境里可能残留 BASE/HEAD/MAKEFLAGS；它们只应作为变量显式传入，
+        # 不能让子 Make 读到与本次检查无关的值。
+        (self.candidate / "scripts").mkdir()
+        (self.candidate / "scripts/base.py").write_text("x = 1\n")
+        self.git(self.candidate, "add", ".")
+        self.git(self.candidate, "commit", "--quiet", "-m", "candidate base")
+        base = self.git(self.candidate, "rev-parse", "HEAD").strip()
+        (self.candidate / "scripts/new.py").write_text("line\n" * 9)
+
+        with mock.patch.dict(
+            os.environ,
+            {"BASE": "unrelated-base", "HEAD": "0" * 40, "MAKEFLAGS": "--no-print-directory"},
+        ):
+            polluted = self.run_make(f"BASE={base}", "ALLOW=scripts/", "MAX_LINES=1")
+
+        self.assertEqual(2, polluted.returncode, polluted.stdout + polluted.stderr)
+        self.assertIn("budget exceeded: 9 > 1", polluted.stdout)
 
 
 if __name__ == "__main__":

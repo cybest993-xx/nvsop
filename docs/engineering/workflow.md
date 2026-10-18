@@ -10,7 +10,7 @@ Inspect cwd, branch, HEAD, worktrees, tracked/staged/untracked changes and accep
 
 `main` is the shared trunk and PR target, not a task workspace or direct-push destination; `dev` is retired. Enable `make hooks` before ref changes. Check `git config --get core.hooksPath`, `git status --short --untracked-files=all` and `git worktree list --porcelain`; fetch before choosing the fixed base. Do not reset or auto-stash to obtain a clean task. A new task need not first synchronize the primary `main` checkout.
 
-`pre-commit` refuses trunk commits, unregistered vendor edits and unformatted staged Python. `pre-push` refuses direct pushes to `main`. These are lightweight local mistake guards, not a sandbox or complete ref policy; server rules protect the shared branch. Use task credentials with no merge/admin/production privileges during implementation.
+`pre-commit` refuses trunk commits, unregistered vendor edits and unformatted staged Python, plus staged Web source checked with that worktree's Prettier when its Web dependencies are installed (otherwise it reports the check as unperformed rather than passing it). `pre-push` refuses direct pushes to `main`. These are lightweight local mistake guards, not a sandbox or complete ref policy; server rules protect the shared branch. Use task credentials with no merge/admin/production privileges during implementation.
 
 **Done:** exact base, task branch/worktree, acceptance and allowed writes are known; unrelated work is preserved. No session-binding file is required for new tasks.
 
@@ -35,6 +35,7 @@ Scope is semantic, not a line-count contest. `make change-size` is advisory. Use
 - Copy/style or behavior-preserving cleanup normally reuses checks without new tests. Normative policy, security and gate changes are not low risk merely because they are Markdown.
 - Bounded behavior reuses sufficient existing evidence; an uncovered behavior normally needs 1–3 independent scenarios. Each extra scenario needs a concrete risk, not coverage cosmetics or private-helper shapes.
 - Confirmed defects and changed critical invariants need failure evidence at the public seam, then the minimum correction and red→green verification.
+- Inspect evidence where it is stored: browser/media captures under `.nvsop/artifacts/`, CI logs through `gh run view --log`. Cite the artifact path and downscale a large capture before loading it, so the next reader re-opens the original instead of trusting a transcription.
 
 Keep required real-infrastructure evidence for persistence, authorization integration, queues/outboxes, disposal across restart, execution-right uniqueness/lease expiry, evidence protection and persisted supervisor effects. Pure-rule tests do not replace integration evidence. Preserve applicable browser coverage when behavior crosses the browser/applications. Field/hardware criteria remain open with their validation owner; synthetic checks cannot claim field acceptance. See [roadmap acceptance](../design/solution-and-roadmap.md#九验收门禁) and the [target-environment matrix](../research/target-environment-validation-matrix.md).
 
@@ -47,6 +48,17 @@ Fixtures are minimal, deterministic, synthetic or sanitized with provenance. Cus
 ### Stable commands
 
 Inspect [Makefile](../../Makefile) for prerequisites and constituent checks; it is the one local/CI interface. Frozen `uv.lock`/`pnpm-lock.yaml` own resolution. `make check` installs/generates before its internal parallel stage; `check-suite` is not an alternative final gate. `CHECK_JOBS` and `PYTEST_WORKERS` (`auto` by default; `0` runs in-process) constrain a busy host, and `CHECK_JOBS_MAX`/`PYTEST_WORKERS_MAX` cap both at `4` so a mis-set value cannot overwhelm the machine. Gates contend for the whole host: before a full gate check `pgrep -af "make check"`, or serialize it with `flock /tmp/nvsop-gate.lock make check`. Treat a failure under concurrent load as suspect until it reproduces on an idle host. Clear test-selection overrides for final gates; retain actual command, environment, base/candidate and results. Reuse still-valid evidence instead of rerunning unrelated suites.
+
+Inner loop after each coherent change, using the smallest target for the slice you touched:
+
+| Slice | Targets |
+|---|---|
+| Center Python | `make center-format center-lint center-type center-unit` |
+| Edge runtime Python | `make edge-format edge-lint edge-type edge-unit` |
+| Web UI | `make web-format web-lint web-type web-unit` |
+| Documentation | `make docs-check` |
+
+These targets are constituents of the final gate, so a mistake surfaces in seconds instead of after the whole gate. `make check` remains the one final gate and adds policy, migrations, contracts, secrets and the Web build.
 
 | Entry | Purpose |
 |---|---|
@@ -62,6 +74,8 @@ Inspect [Makefile](../../Makefile) for prerequisites and constituent checks; it 
 | `make task-merge` | Verify local task and open PR identity before exact-head squash merge, then clean that single task |
 | `make task-cleanup` / `make task-abandon` | Exact single-task cleanup after verified merge / explicit supersession proof |
 
+Waiting is not polling: start a slow command or a gate as a background job and read its output when it finishes, and prefer `gh run watch <id> --exit-status` over repeated `gh run view`. A `sleep` loop, or retrying an agent-runtime invocation that failed because the tool does not exist, burns the run; a failure seen under that load stays suspect until it reproduces on an idle host.
+
 **Done:** every acceptance criterion and required check has actual results or an explicit gap. Stop optional tests/refactors when sufficient evidence is complete.
 
 ## 3. Review and repair
@@ -69,6 +83,8 @@ Inspect [Makefile](../../Makefile) for prerequisites and constituent checks; it 
 Self-review the complete diff, new files, callers and references. Require independent read-only **Spec + Standards** review for critical risks, public/cross-module interfaces, shared behavior, dependencies, CI, deployment, vendor, repository policy, agent instructions or unbounded impact. Ordinary bounded changes need no independent reviewer by default.
 
 Bind review to a fixed base and candidate. Separate read-only subagents satisfy independent review; implementer self-review does not. Gate changes, exemptions and weakened tests require substantive inspection of the actual diff. `pr-check` risk/evidence fields and PR-body booleans are hints, not enforcement or approval. Fewer assertions block only when they lose an actual regression/critical failure path. Report Spec and Standards separately; optional naming/size/refactoring preferences are not defects.
+
+A dispatched review names its fixed base and candidate, the commands it may run and the tools it actually has, and returns the commands it executed with their outcomes; when it could not produce required evidence it reports that gap instead of implying coverage. `make pr-check` and `make change-size` already compute the risk, diff size, protections and required checks a reviewer should read rather than re-derive.
 
 Consolidate concrete defects into one bounded repair batch owned by the implementation session. Verify the increment and affected callers; reuse unaffected evidence. Required missing review/checks keep readiness pending. Evidence is invalidated by changes to its covered source, configuration, dependencies or external inputs. Codex GitHub review is optional, non-blocking feedback: record/dispose actual findings without treating quota, delay or absence as a gate.
 

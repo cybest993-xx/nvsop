@@ -47,6 +47,18 @@ class PreCommitTest(unittest.TestCase):
             check=False,
         )
 
+    def install_prettier(self, script: str) -> None:
+        binary = self.root / "apps/control-web/node_modules/.bin/prettier"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_text(script)
+        binary.chmod(0o755)
+
+    def stage_web(self, content: str) -> None:
+        source = self.root / "apps/control-web/src/sample.ts"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(content)
+        self.git("add", "apps/control-web/src/sample.ts")
+
     def test_partial_staging_checks_index_bytes_and_preserves_worktree(self) -> None:
         source = self.root / "sample.py"
         for staged, unstaged, code in (("x=1\n", "x = 1\n", 1), ("x = 1\n", "x=1\n", 0)):
@@ -89,3 +101,36 @@ class PreCommitTest(unittest.TestCase):
         result = self.hook()
         self.assertIn("make sync", result.stderr)
         self.assertEqual(1, result.returncode)
+
+    def test_staged_web_source_is_checked_with_the_worktree_prettier(self) -> None:
+        self.install_prettier(
+            "#!/bin/sh\n"
+            "if grep -q 'const a=1' -; then\n"
+            "  echo '(stdin)' >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n"
+        )
+        self.stage_web("const a=1\n")
+        rejected = self.hook()
+        self.assertEqual(1, rejected.returncode, rejected.stderr)
+        self.assertIn("apps/control-web/src/sample.ts", rejected.stderr)
+        self.assertIn("make web-format", rejected.stderr)
+
+        self.stage_web("const a = 1\n")
+        accepted = self.hook()
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+
+    def test_missing_web_dependencies_report_the_unperformed_check(self) -> None:
+        self.stage_web("const a=1\n")
+        result = self.hook()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("make web-install", result.stderr)
+        self.assertIn("not checked", result.stderr)
+
+    def test_prettier_that_cannot_run_does_not_block_the_commit(self) -> None:
+        self.install_prettier("#!/bin/sh\necho 'node: not found' >&2\nexit 127\n")
+        self.stage_web("const a=1\n")
+        result = self.hook()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("not checked", result.stderr)

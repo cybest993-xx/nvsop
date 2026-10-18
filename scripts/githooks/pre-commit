@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """轻量提交门禁，由 make hooks 为人员和代理统一启用。
 
-拒绝 trunk 直接提交、vendor 误改与未格式化的暂存 Python；只读 Git index，
+拒绝 trunk 直接提交、vendor 误改与未格式化的暂存源码；只读 Git index，
 不检查无关工作区修改。基座变更走 subtree 或 ADR-0007 登记补丁，补丁提交需显式
-NVSOP_VENDOR_PATCH=1。使用标准库，格式检查调用当前 worktree 的冻结 Ruff。
-完整验证仍由 make check/CI 执行，不在 hook 中重复运行。
+NVSOP_VENDOR_PATCH=1。使用标准库：Python 格式检查调用当前 worktree 的冻结 Ruff，
+Web 源码格式检查调用同一个 worktree 的 Prettier。缺少 Web 依赖或 Prettier 无法运行时
+只报告检查未执行，不阻断提交；完整验证仍由 make check/CI 执行，不在 hook 中重复运行。
 """
 
 from __future__ import annotations
@@ -17,6 +18,10 @@ from pathlib import Path
 PROTECTED_BRANCHES = {"main", "dev"}
 VENDOR = "vendor"
 VENDOR_OVERRIDE = "NVSOP_VENDOR_PATCH"
+WEB_PACKAGE = Path("apps") / "control-web"
+WEB_SUFFIXES = frozenset(
+    {".ts", ".tsx", ".vue", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css", ".scss", ".html"}
+)
 
 
 def git(*args: str) -> str:
@@ -95,14 +100,66 @@ def refuse_unformatted_python(root: Path, staged: list[Path]) -> list[str]:
     ]
 
 
+def web_sources(staged: list[Path]) -> list[Path]:
+    return [
+        path
+        for path in staged
+        if path.parts[:2] == WEB_PACKAGE.parts
+        and path.suffix in WEB_SUFFIXES
+        and "node_modules" not in path.parts
+    ]
+
+
+def refuse_unformatted_web(root: Path, staged: list[Path]) -> tuple[list[str], list[str]]:
+    """返回 (未格式化错误, 检查未执行的提示)：Prettier 自身不可用时只提示，不阻断提交。"""
+
+    web = web_sources(staged)
+    if not web:
+        return [], []
+    prettier = root / WEB_PACKAGE / "node_modules" / ".bin" / "prettier"
+    if not prettier.is_file():
+        return [], [
+            "staged Web formatting was not checked: this worktree has no Web dependencies, so "
+            "run `make web-install` and commit again (`make check` still checks them)."
+        ]
+
+    unformatted: list[str] = []
+    for path in web:
+        result = subprocess.run(
+            [prettier, "--check", "--stdin-filepath", path.as_posix()],
+            cwd=root,
+            input=staged_blob(path),
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            continue
+        if result.returncode != 1:
+            detail = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
+            return [], [
+                "staged Web formatting was not checked: Prettier could not run "
+                f"({detail or 'no output'}). Run `make web-format`, then commit again."
+            ]
+        unformatted.append(str(path))
+    if not unformatted:
+        return [], []
+    return [
+        "staged Web source is not formatted: run `make web-format` on those files, stage them "
+        "again, and retry.\n" + "\n".join(unformatted)
+    ], []
+
+
 def main() -> int:
     root = Path(git("rev-parse", "--show-toplevel").strip())
     staged = staged_files("ACMR")
+    web_errors, web_warnings = refuse_unformatted_web(root, staged)
     errors = (
         refuse_protected_branch()
         + refuse_vendor_edits(staged_files("ACMRD"))
         + refuse_unformatted_python(root, staged)
+        + web_errors
     )
+    for warning in web_warnings:
+        print(f"pre-commit note: {warning}", file=sys.stderr)
     if not errors:
         return 0
     print("pre-commit refused this commit:", file=sys.stderr)

@@ -1,11 +1,11 @@
-import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 
 import { ControlPlaneError } from '@/api/controlPlane'
 import DevicesView from '@/modules/devices/DevicesView.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const api = vi.hoisted(() => ({
   readConnectors: vi.fn(),
@@ -84,7 +84,7 @@ beforeEach(() => {
 describe('设备页中的连接测试', () => {
   async function mountDevices() {
     setSession()
-    const wrapper = mount(DevicesView, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     return wrapper
   }
@@ -200,7 +200,7 @@ describe('设备页中的连接测试', () => {
     setSession(['device.connector.edit'])
     api.enqueueConnectorConnectionTest.mockResolvedValue(COMMAND)
 
-    const wrapper = mount(DevicesView)
+    const wrapper = mountWithNaive(DevicesView)
     await flushPromises()
     await wrapper.find('input[name="known-test-connector-id"]').setValue('connector-1')
     await wrapper.find('form[aria-label="按标识测试连接"]').trigger('submit')

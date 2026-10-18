@@ -1,11 +1,12 @@
-import ElementPlus from 'element-plus'
+import { NSelect } from 'naive-ui'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, type VueWrapper } from '@vue/test-utils'
 
 import { ControlPlaneError } from '@/api/controlPlane'
 import StationRetentionPanel from '@/modules/devices/StationRetentionPanel.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const api = vi.hoisted(() => ({
   readRetentionPolicy: vi.fn(),
@@ -114,18 +115,17 @@ function mountPanel(permissions: string[], stations = STATIONS) {
     expires_at: '2026-09-07T13:00:00+00:00',
     permissions,
   }
-  return mount(StationRetentionPanel, {
+  return mountWithNaive(StationRetentionPanel, {
     props: { stations },
-    global: { plugins: [ElementPlus] },
   })
 }
 
-// 渲染顺序：0 是工位选择，1 是「工位保留来源」。Element Plus 把 aria-label 放在内部输入上，
-// 因此按组件顺序取，不按属性取。
+// 「工位保留来源」是面板里的原生 select（键盘与 role 语义完整）；工位选择器是 NSelect，不在其中。
+// 面板渲染顺序上它排在所有逐字段选择之前，因此取第一个原生 select。
 function stationModeSelect(wrapper: VueWrapper) {
-  const selects = wrapper.findAllComponents({ name: 'ElSelect' })
-  expect(selects.length).toBeGreaterThan(1)
-  return selects[1]!
+  const selects = wrapper.findAll('select')
+  expect(selects.length).toBeGreaterThan(0)
+  return selects[0]!
 }
 
 function button(wrapper: VueWrapper, label: string) {
@@ -310,17 +310,15 @@ describe('工位保留策略面板', () => {
   })
 
   it('does not reuse the previous station form after selecting a station that cannot be read', async () => {
-    const wrapper = mountPanel(['retention.policy.view', 'retention.policy.edit'])
+    const wrapper = mountPanel(
+      ['retention.policy.view', 'retention.policy.edit'],
+      [...STATIONS, { ...STATIONS[0]!, id: 'station-2', code: 'A-02', name: '二号装配工位' }],
+    )
     await flushPromises()
-    await wrapper.setProps({
-      stations: [
-        ...STATIONS,
-        { ...STATIONS[0]!, id: 'station-2', code: 'A-02', name: '二号装配工位' },
-      ],
-    })
     api.readStationRetention.mockRejectedValue(new Error('二号工位读取失败'))
 
-    await wrapper.findAllComponents({ name: 'ElSelect' })[0]!.setValue('station-2')
+    // NSelect 的 v-model:value 监听 update:value，直接发出该事件即模拟一次选择。
+    wrapper.findAllComponents(NSelect)[0]!.vm.$emit('update:value', 'station-2')
     await flushPromises()
 
     expect(wrapper.get('[role="alert"]').text()).toContain('二号工位读取失败')

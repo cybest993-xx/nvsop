@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElOption, ElSelect } from 'element-plus'
+import { NButton, NForm, NInput, NModal, NSelect } from 'naive-ui'
 import { computed, reactive, watch } from 'vue'
 
 import {
@@ -7,6 +7,7 @@ import {
   type TemplateDraftConfiguration,
   type TemplateDraftView,
 } from '@/api/controlPlane'
+import FieldRow from '@/components/FieldRow.vue'
 import type { DraftEditorTarget } from './TemplateDraftEditor.types'
 
 interface EditorStep {
@@ -272,25 +273,42 @@ async function submitEditor(): Promise<void> {
 </script>
 
 <template>
-  <ElDialog v-model="visible" title="编辑模板草稿" width="48rem">
-    <ElForm
+  <NModal v-model:show="visible" preset="dialog" title="编辑模板草稿" :style="{ width: '48rem' }">
+    <NForm
       class="template-management__edit-form"
-      label-position="top"
+      label-placement="top"
       @submit.prevent="submitEditor"
     >
       <div class="template-management__edit-meta">
-        <ElFormItem label="草稿 ID">
-          <ElInput v-model="editor.id" name="draft-id" autocomplete="off" />
-        </ElFormItem>
-        <ElFormItem label="修订号">
-          <ElInput v-model="editor.revision" name="draft-revision" type="number" />
-        </ElFormItem>
-        <ElFormItem label="顺序声明">
-          <ElSelect v-model="editor.ordering" name="ordering" class="template-management__select">
-            <ElOption label="严格顺序" value="strict" />
-            <ElOption label="不要求顺序" value="unordered" />
-          </ElSelect>
-        </ElFormItem>
+        <FieldRow label="草稿 ID">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="editor.id"
+              :input-props="{ id, name: 'draft-id', autocomplete: 'off' }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="修订号">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="editor.revision"
+              :input-props="{ id, name: 'draft-revision', type: 'number' }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="顺序声明">
+          <template #default="{ labelId }">
+            <NSelect
+              v-model:value="editor.ordering"
+              :aria-labelledby="labelId"
+              class="template-management__select"
+              :options="[
+                { label: '严格顺序', value: 'strict' },
+                { label: '不要求顺序', value: 'unordered' },
+              ]"
+            />
+          </template>
+        </FieldRow>
       </div>
 
       <fieldset class="template-management__steps">
@@ -301,29 +319,27 @@ async function submitEditor(): Promise<void> {
           class="template-management__step-row"
         >
           <span class="template-management__step-number">{{ step.number }}</span>
-          <ElInput
-            v-model="step.name"
-            :name="`step-name-${index}`"
-            aria-label="步骤名称"
+          <NInput
+            v-model:value="step.name"
             placeholder="步骤名称"
+            :input-props="{ name: `step-name-${index}`, 'aria-label': '步骤名称' }"
             @input="syncDescription(index)"
           />
-          <ElInput
-            v-model="step.description"
-            :name="`step-description-${index}`"
-            aria-label="步骤描述"
+          <NInput
+            v-model:value="step.description"
             placeholder="(步骤号)描述"
+            :input-props="{ name: `step-description-${index}`, 'aria-label': '步骤描述' }"
           />
-          <ElButton
+          <NButton
             link
-            type="danger"
+            type="error"
             :disabled="editor.steps.length <= 1"
             @click="removeStep(index)"
           >
             移除
-          </ElButton>
+          </NButton>
         </div>
-        <ElButton link type="primary" @click="addStep">添加步骤</ElButton>
+        <NButton link type="primary" @click="addStep">添加步骤</NButton>
       </fieldset>
 
       <fieldset class="template-management__boundary">
@@ -405,37 +421,44 @@ async function submitEditor(): Promise<void> {
                 @input="markBoundaryDirty"
               />
             </label>
-            <ElButton link type="danger" @click="removeEndSignal(index)">移除</ElButton>
+            <NButton link type="error" @click="removeEndSignal(index)">移除</NButton>
           </div>
-          <ElButton link type="primary" @click="addEndSignal">添加结束信号</ElButton>
+          <NButton link type="primary" @click="addEndSignal">添加结束信号</NButton>
         </div>
       </fieldset>
 
       <div class="template-management__edit-meta">
-        <ElFormItem label="空闲时限（秒）">
-          <ElInput
-            v-model="editor.idle_timeout_seconds"
-            name="idle-timeout-seconds"
-            type="number"
-          />
-        </ElFormItem>
-        <ElFormItem label="步骤时限（秒）">
-          <ElInput
-            v-model="editor.step_deadline_seconds"
-            name="step-deadline-seconds"
-            type="number"
-          />
-        </ElFormItem>
-        <ElFormItem label="处置策略">
-          <ElInput v-model="editor.disposition_policy" name="disposition-policy" />
-        </ElFormItem>
+        <FieldRow label="空闲时限（秒）">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="editor.idle_timeout_seconds"
+              :input-props="{ id, name: 'idle-timeout-seconds', type: 'number' }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="步骤时限（秒）">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="editor.step_deadline_seconds"
+              :input-props="{ id, name: 'step-deadline-seconds', type: 'number' }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="处置策略">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="editor.disposition_policy"
+              :input-props="{ id, name: 'disposition-policy' }"
+            />
+          </template>
+        </FieldRow>
       </div>
-    </ElForm>
-    <template #footer>
-      <ElButton @click="visible = false">取消</ElButton>
-      <ElButton type="primary" @click="submitEditor">保存草稿</ElButton>
+    </NForm>
+    <template #action>
+      <NButton @click="visible = false">取消</NButton>
+      <NButton type="primary" @click="submitEditor">保存草稿</NButton>
     </template>
-  </ElDialog>
+  </NModal>
 </template>
 
 <style scoped>
@@ -538,8 +561,8 @@ async function submitEditor(): Promise<void> {
     grid-template-columns: 2rem 1fr;
   }
 
-  .template-management__step-row .el-input:nth-child(3),
-  .template-management__step-row .el-button {
+  .template-management__step-row .n-input:nth-child(3),
+  .template-management__step-row .n-button {
     grid-column: 2;
   }
 

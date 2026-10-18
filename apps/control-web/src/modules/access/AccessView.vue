@@ -10,7 +10,7 @@
  * this is the security boundary — the use case checks regardless — but an operator who fills in
  * a form and is then refused has been misled.
  */
-import { ElTabPane, ElTabs } from 'element-plus'
+import { NTabPane, NTabs } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
 
 import {
@@ -73,15 +73,15 @@ onMounted(refresh)
          state, not the colour (Q32). -->
     <p v-if="failure" class="access__failure" role="alert">{{ failure }}</p>
 
-    <ElTabs>
-      <ElTabPane v-if="mayViewUsers" label="账户" name="users">
+    <NTabs>
+      <NTabPane v-if="mayViewUsers" label="账户" name="users">
         <AccountsPanel :users="users" :roles="roles" :loading="loading" @changed="refresh" />
-      </ElTabPane>
+      </NTabPane>
 
-      <ElTabPane v-if="mayViewRoles" label="角色" name="roles">
+      <NTabPane v-if="mayViewRoles" label="角色" name="roles">
         <RolesPanel :roles="roles" :catalogue="catalogue" :loading="loading" @changed="refresh" />
-      </ElTabPane>
-    </ElTabs>
+      </NTabPane>
+    </NTabs>
   </section>
 </template>
 
@@ -94,8 +94,8 @@ onMounted(refresh)
 .access__failure {
   margin: 0 0 1rem;
   padding: 0.6rem 0.9rem;
-  border-left: 3px solid var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 </style>

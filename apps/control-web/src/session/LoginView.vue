@@ -3,11 +3,12 @@
  * The login page. Q32's baseline in one form: labelled inputs, keyboard operation, an error that
  * is announced rather than only coloured.
  */
-import { ElButton, ElForm, ElFormItem, ElInput } from 'element-plus'
+import { NButton, NForm, NInput, type InputInst } from 'naive-ui'
 import { computed, onMounted, ref, useTemplateRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { ControlPlaneError } from '@/api/controlPlane'
+import FieldRow from '@/components/FieldRow.vue'
 import { OVERVIEW_ROUTE } from '@/router'
 import { useSessionStore } from '@/session/store'
 
@@ -30,16 +31,22 @@ const fieldMessages = ref<Record<string, string>>({})
 // lapsed session it does nothing. This works either way, and it is the form
 // `vuejs-accessibility/no-autofocus` asks for. Safe here specifically because the form is the
 // whole page: there is no reading position to move focus away from.
-const nameField = useTemplateRef<InstanceType<typeof ElInput>>('nameField')
+const nameField = useTemplateRef<InputInst>('nameField')
 onMounted(() => nameField.value?.focus())
 
-// Element Plus reads this prop as `val ? "error" : ""`, so an empty string is exactly its "no
-// error" case. Stated rather than left as the `undefined` an absent key gives, so the value the
+// Naive UI reads `validationStatus` and `feedback` separately, so "no error" is the absence of a
+// status rather than an empty string. Stated as `undefined` rather than left off so the value the
 // prop receives is the same type whether or not the field was rejected.
 const loginNameError = computed(() => fieldMessages.value.login_name ?? '')
 const passwordError = computed(() => fieldMessages.value.password ?? '')
 
 const canSubmit = computed(() => loginName.value.length > 0 && password.value.length > 0)
+
+function submitOnEnter(event: KeyboardEvent): void {
+  if (event.key === 'Enter') {
+    void submit()
+  }
+}
 
 async function submit(): Promise<void> {
   if (!canSubmit.value || submitting.value) {
@@ -88,43 +95,53 @@ async function submit(): Promise<void> {
         {{ refusal }}
       </p>
 
-      <ElForm label-position="top" @submit.prevent="submit">
-        <ElFormItem label="登录名" :error="loginNameError">
-          <!-- `id`/`for` is what `ElFormItem`'s label binds through. Focus is taken by the
-               `onMounted` above rather than by `autofocus`. -->
-          <ElInput
-            id="login-name"
-            ref="nameField"
-            v-model="loginName"
-            name="login_name"
-            autocomplete="username"
-            :disabled="submitting"
-          />
-        </ElFormItem>
-        <ElFormItem label="密码" :error="passwordError">
-          <ElInput
-            id="password"
-            v-model="password"
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            show-password
-            :disabled="submitting"
-            @keyup.enter="submit"
-          />
-        </ElFormItem>
-        <ElFormItem>
-          <ElButton
+      <NForm label-placement="top" @submit.prevent="submit">
+        <FieldRow
+          label="登录名"
+          :feedback="loginNameError"
+          :status="loginNameError ? 'error' : undefined"
+        >
+          <template #default="{ id }">
+            <NInput
+              ref="nameField"
+              v-model:value="loginName"
+              :input-props="{ id, name: 'login_name', autocomplete: 'username' }"
+              :disabled="submitting"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow
+          label="密码"
+          :feedback="passwordError"
+          :status="passwordError ? 'error' : undefined"
+        >
+          <template #default="{ id }">
+            <NInput
+              v-model:value="password"
+              show-password-on="click"
+              :input-props="{
+                id,
+                name: 'password',
+                autocomplete: 'current-password',
+                onKeyup: submitOnEnter,
+                type: 'password',
+              }"
+              :disabled="submitting"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="">
+          <NButton
             type="primary"
-            native-type="submit"
+            attr-type="submit"
             class="login__submit"
             :loading="submitting"
             :disabled="!canSubmit || submitting"
           >
             {{ submitting ? '正在登录…' : '登录' }}
-          </ElButton>
-        </ElFormItem>
-      </ElForm>
+          </NButton>
+        </FieldRow>
+      </NForm>
     </section>
   </main>
 </template>
@@ -137,15 +154,15 @@ async function submit(): Promise<void> {
   /* 1366×768 is the smallest supported desktop (Q32), so the panel is centred rather than
      vertically stretched. */
   min-height: 100vh;
-  background: var(--el-bg-color-page);
+  background: var(--color-page-bg);
 }
 
 .login__panel {
   width: 26rem;
   padding: 2rem;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  background: var(--el-bg-color);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
 }
 
 .login__heading {
@@ -155,7 +172,7 @@ async function submit(): Promise<void> {
 
 .login__hint {
   margin: 0 0 1.5rem;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .login__refusal {
@@ -163,20 +180,13 @@ async function submit(): Promise<void> {
   gap: 0.5rem;
   margin: 0 0 1rem;
   padding: 0.625rem 0.75rem;
-  border: 1px solid var(--el-color-danger);
-  border-radius: 4px;
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .login__submit {
   width: 100%;
-}
-
-/* Q32 requires focus to be visible. Element Plus's own outline is subtle on a light panel, so
-   the ring is stated here rather than left to the theme. */
-.login__panel :focus-visible {
-  outline: 2px solid var(--el-color-primary);
-  outline-offset: 2px;
 }
 </style>

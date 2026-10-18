@@ -11,16 +11,7 @@
  * that names the permission which would leave the system unadministrable, when the
  * last-administration guard refuses.
  */
-import {
-  ElButton,
-  ElCheckbox,
-  ElCheckboxGroup,
-  ElDialog,
-  ElForm,
-  ElFormItem,
-  ElInput,
-  ElMessage,
-} from 'element-plus'
+import { NButton, NCheckbox, NCheckboxGroup, NForm, NInput, NModal, useMessage } from 'naive-ui'
 import { computed, ref } from 'vue'
 
 import {
@@ -31,7 +22,10 @@ import {
   type FieldError,
   type RoleView,
 } from '@/api/controlPlane'
+import FieldRow from '@/components/FieldRow.vue'
 import { useSessionStore } from '@/session/store'
+
+const message = useMessage()
 
 defineProps<{ roles: RoleView[]; catalogue: string[]; loading: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -100,7 +94,7 @@ async function submitRole(): Promise<void> {
 
 async function removeRole(role: RoleView): Promise<void> {
   if (await attempt(() => deleteRole(role.id))) {
-    ElMessage.success('角色已删除')
+    message.success('角色已删除')
     emit('changed')
   }
 }
@@ -109,9 +103,7 @@ async function removeRole(role: RoleView): Promise<void> {
 <template>
   <div class="panel">
     <div class="panel__actions">
-      <ElButton v-if="mayEditRoles" type="primary" @click="openRoleDialog(null)">
-        新建角色
-      </ElButton>
+      <NButton v-if="mayEditRoles" type="primary" @click="openRoleDialog(null)"> 新建角色 </NButton>
     </div>
 
     <p v-if="failure" class="panel__failure" role="alert">{{ failure }}</p>
@@ -138,51 +130,64 @@ async function removeRole(role: RoleView): Promise<void> {
             <span v-else>{{ role.permissions.join('、') }}</span>
           </td>
           <td class="panel__row-actions">
-            <ElButton v-if="mayEditRoles" link type="primary" @click="openRoleDialog(role)">
+            <NButton v-if="mayEditRoles" link type="primary" @click="openRoleDialog(role)">
               编辑
-            </ElButton>
-            <ElButton v-if="mayDeleteRoles" link type="danger" @click="removeRole(role)">
+            </NButton>
+            <NButton v-if="mayDeleteRoles" link type="error" @click="removeRole(role)">
               删除
-            </ElButton>
+            </NButton>
           </td>
         </tr>
       </tbody>
     </table>
 
-    <ElDialog v-model="roleDialog" :title="editingRole ? '编辑角色' : '新建角色'" width="34rem">
-      <ElForm label-width="5rem" @submit.prevent="submitRole">
-        <ElFormItem label="编码">
+    <NModal
+      v-model:show="roleDialog"
+      preset="dialog"
+      :title="editingRole ? '编辑角色' : '新建角色'"
+      :style="{ width: '34rem' }"
+    >
+      <NForm label-width="5rem" @submit.prevent="submitRole">
+        <FieldRow label="编码">
           <!-- The code is the natural key and is fixed once created, like a login name. -->
-          <ElInput
-            v-model="roleDraft.code"
-            name="code"
-            :disabled="editingRole !== null"
-            autocomplete="off"
-          />
-          <p v-if="fieldError('code')" class="panel__field-error" role="alert">
-            {{ fieldError('code') }}
-          </p>
-        </ElFormItem>
-        <ElFormItem label="名称">
-          <ElInput v-model="roleDraft.name" name="name" autocomplete="off" />
-          <p v-if="fieldError('name')" class="panel__field-error" role="alert">
-            {{ fieldError('name') }}
-          </p>
-        </ElFormItem>
-        <ElFormItem label="权限">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="roleDraft.code"
+              :disabled="editingRole !== null"
+              :input-props="{ id, name: 'code', autocomplete: 'off' }"
+            />
+            <p v-if="fieldError('code')" class="panel__field-error" role="alert">
+              {{ fieldError('code') }}
+            </p>
+          </template>
+        </FieldRow>
+        <FieldRow label="名称">
+          <template #default="{ id }">
+            <NInput
+              v-model:value="roleDraft.name"
+              :input-props="{ id, name: 'name', autocomplete: 'off' }"
+            />
+            <p v-if="fieldError('name')" class="panel__field-error" role="alert">
+              {{ fieldError('name') }}
+            </p>
+          </template>
+        </FieldRow>
+        <FieldRow label="权限">
           <!-- Rendered from the backend's catalogue, never from a list kept here. -->
-          <ElCheckboxGroup v-model="roleDraft.permissions">
-            <ElCheckbox v-for="permission in catalogue" :key="permission" :value="permission">
-              {{ permission }}
-            </ElCheckbox>
-          </ElCheckboxGroup>
-        </ElFormItem>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="roleDialog = false">取消</ElButton>
-        <ElButton type="primary" @click="submitRole">保存</ElButton>
+          <template #default="{ labelId }">
+            <NCheckboxGroup v-model:value="roleDraft.permissions" :aria-labelledby="labelId">
+              <NCheckbox v-for="permission in catalogue" :key="permission" :value="permission">
+                {{ permission }}
+              </NCheckbox>
+            </NCheckboxGroup>
+          </template>
+        </FieldRow>
+      </NForm>
+      <template #action>
+        <NButton @click="roleDialog = false">取消</NButton>
+        <NButton type="primary" @click="submitRole">保存</NButton>
       </template>
-    </ElDialog>
+    </NModal>
   </div>
 </template>
 
@@ -194,15 +199,15 @@ async function removeRole(role: RoleView): Promise<void> {
 .panel__failure {
   margin: 0 0 1rem;
   padding: 0.6rem 0.9rem;
-  border-left: 3px solid var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
 }
 
 .panel__field-error {
   margin: 0.25rem 0 0;
   width: 100%;
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 
 .panel__table {
@@ -212,14 +217,14 @@ async function removeRole(role: RoleView): Promise<void> {
 
 .panel__caption {
   margin-bottom: 0.5rem;
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
   text-align: left;
 }
 
 .panel__table th,
 .panel__table td {
   padding: 0.55rem 0.75rem;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--color-border-light);
   text-align: left;
   vertical-align: middle;
 }
@@ -232,11 +237,11 @@ async function removeRole(role: RoleView): Promise<void> {
 
 .panel__none,
 .panel__loading {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 
 .panel :focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 </style>

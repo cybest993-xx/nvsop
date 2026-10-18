@@ -6,16 +6,16 @@
  * 记录字段禁用与解释。
  */
 
-import ElementPlus from 'element-plus'
-import { ElCheckbox } from 'element-plus'
+import { NCheckbox } from 'naive-ui'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import { ControlPlaneError } from '@/api/controlPlane'
 import ForceHandoverPanel from '@/modules/devices/ForceHandoverPanel.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const api = vi.hoisted(() => ({
   readHandoverRisk: vi.fn(),
@@ -67,7 +67,7 @@ function setIdentity(userId: string): void {
 }
 
 function mountPanel(): VueWrapper {
-  return mount(ForceHandoverPanel, { global: { plugins: [ElementPlus] } })
+  return mountWithNaive(ForceHandoverPanel)
 }
 
 function buttonWith(wrapper: VueWrapper, text: string) {
@@ -79,12 +79,15 @@ function buttonWith(wrapper: VueWrapper, text: string) {
 }
 
 async function setCheckbox(wrapper: VueWrapper, index: number, value: boolean): Promise<void> {
-  const boxes = wrapper.findAllComponents(ElCheckbox)
+  const boxes = wrapper.findAllComponents(NCheckbox)
   const box = boxes[index]
   if (box === undefined) {
     throw new Error(`no checkbox at index ${index}`)
   }
-  await box.find('input').setValue(value)
+  // NCheckbox 渲染的是带 role="checkbox" 的 div，没有内部 input：点击根元素切换勾选。
+  if (box.props('checked') !== value) {
+    await box.trigger('click')
+  }
 }
 
 beforeEach(() => {
@@ -111,9 +114,9 @@ describe('强制改绑双人确认面板', () => {
     expect(wrapper.text()).toContain(RISK)
 
     // 没有查看权限时按已知 ID 填写（force-only 用户）。
-    await wrapper.find('#handover-station-id').setValue('station-1')
-    await wrapper.find('#handover-from-host-id').setValue('host-old')
-    await wrapper.find('#handover-to-host-id').setValue('host-new')
+    await wrapper.find('input[name="station_id"]').setValue('station-1')
+    await wrapper.find('input[name="from_host_id"]').setValue('host-old')
+    await wrapper.find('input[name="to_host_id"]').setValue('host-new')
     await setCheckbox(wrapper, 0, true)
     await nextTick()
 
@@ -134,7 +137,7 @@ describe('强制改绑双人确认面板', () => {
     await nextTick()
     expect(wrapper.find('.handover__record').exists()).toBe(false)
 
-    await wrapper.find('#handover-request-id').setValue('handover-1')
+    await wrapper.find('input[name="handover_id"]').setValue('handover-1')
     await buttonWith(wrapper, '读取请求').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('等待另一名有权用户确认')
@@ -161,12 +164,12 @@ describe('强制改绑双人确认面板', () => {
     const wrapper = mountPanel()
     await flushPromises()
 
-    await wrapper.find('#handover-request-id').setValue('handover-1')
+    await wrapper.find('input[name="handover_id"]').setValue('handover-1')
     await buttonWith(wrapper, '读取请求').trigger('click')
     await nextTick()
 
     // 读取尚未返回时改输入：旧响应到达后不得渲染。
-    await wrapper.find('#handover-request-id').setValue('handover-2')
+    await wrapper.find('input[name="handover_id"]').setValue('handover-2')
     first.resolve(RECORD)
     await flushPromises()
     expect(wrapper.find('.handover__record').exists()).toBe(false)
@@ -179,7 +182,7 @@ describe('强制改绑双人确认面板', () => {
     await nextTick()
     expect(wrapper.find('.handover__confirm').exists()).toBe(true)
 
-    await wrapper.find('#handover-request-id').setValue('handover-3')
+    await wrapper.find('input[name="handover_id"]').setValue('handover-3')
     await nextTick()
     expect(wrapper.find('.handover__confirm').exists()).toBe(false)
   })
@@ -189,7 +192,7 @@ describe('强制改绑双人确认面板', () => {
     api.readHandover.mockResolvedValue({ ...RECORD, operator_id: 'operator-1' })
     const wrapper = mountPanel()
     await flushPromises()
-    await wrapper.find('#handover-request-id').setValue('handover-1')
+    await wrapper.find('input[name="handover_id"]').setValue('handover-1')
     await buttonWith(wrapper, '读取请求').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('你是本请求的操作者')
@@ -221,7 +224,7 @@ describe('强制改绑双人确认面板', () => {
     const wrapper = mountPanel()
     await flushPromises()
     expect(wrapper.text()).toContain('无法读取服务器风险原文')
-    expect(wrapper.find('#handover-station-id').exists()).toBe(false)
+    expect(wrapper.find('input[name="station_id"]').exists()).toBe(false)
     expect(api.createHandover).not.toHaveBeenCalled()
   })
 })

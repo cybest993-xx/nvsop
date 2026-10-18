@@ -9,6 +9,7 @@ Read guidance when its trigger applies, expanding for affected callers or confli
 - **Plan or investigate:** deliver findings or the requested plan; edit only when requested.
 - **Use Skills:** follow [Skills routing](docs/engineering/workflow.md#skills-routing); repository rules and operation authorization still apply.
 - **Implement code or scripts:** read [coding.md](docs/engineering/coding.md) and the implementation/verification sections of [workflow.md](docs/engineering/workflow.md); locate the public entry, affected callers and existing tests.
+- **Build, restyle or delete Web UI:** read [frontend.md](docs/engineering/frontend.md).
 - **Change repository shape, ownership or dependencies between modules:** read [architecture.md](docs/engineering/architecture.md).
 - **Change generated/ignored state, CI, generated contracts, dependencies or vendor code:** read [maintenance.md](docs/engineering/maintenance.md) and the relevant [workflow](docs/engineering/workflow.md) sections.
 - **Write, move or delete documentation/instructions:** read [documentation.md](docs/engineering/documentation.md) and the validation/review sections of [workflow.md](docs/engineering/workflow.md).

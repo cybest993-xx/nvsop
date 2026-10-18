@@ -22,12 +22,13 @@ export default defineConfig({
     },
   },
   build: {
-    // Element Plus 的共享 chunk 约为 700 kB；保留阈值可让 reporter 继续暴露更大的异常增长。
-    chunkSizeWarningLimit: 800,
+    // 按新库实测：最大 chunk 是设备页 156 kB（2026-10 迁移后实测），其余在 145 kB 以下。
+    // 阈值留出余量，让 reporter 对真正的异常增长报警。
+    chunkSizeWarningLimit: 200,
   },
   test: {
     environment: 'jsdom',
-    // 组件测试会导入 Element Plus，其样式属于副作用导入；测试不需要处理 CSS。
+    // Naive UI 的样式是运行时注入的 CSS-in-JS，测试不导入任何 CSS 文件；跳过样式处理。
     css: false,
     include: ['tests/integration/**/*.spec.ts'],
   },

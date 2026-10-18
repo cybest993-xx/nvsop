@@ -9,16 +9,15 @@
  * lives in the browser runtime, so its scenario is carried here rather than in `tests/system/`.
  */
 
-import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
 import { createRouter, createWebHistory, type Router } from 'vue-router'
 
 import { ControlPlaneError } from '@/api/controlPlane'
 import AppShell from '@/shell/AppShell.vue'
 import LoginView from '@/session/LoginView.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const { openSession, endSession } = vi.hoisted(() => ({
   openSession: vi.fn(),
@@ -70,9 +69,9 @@ async function mountLogin(query: Record<string, string> = {}) {
   // Attached to the document, because `document.activeElement` is only meaningful for an
   // element that is actually in it — a detached mount reports `<body>` whatever the component
   // focused.
-  const wrapper = mount(LoginView, {
+  const wrapper = mountWithNaive(LoginView, {
     attachTo: document.body,
-    global: { plugins: [router, ElementPlus] },
+    global: { plugins: [router] },
   })
   return { wrapper, router }
 }
@@ -254,7 +253,7 @@ describe('the protected shell', () => {
     const session = useSessionStore()
     session.current = { ...SESSION, permissions }
     session.settled = true
-    const wrapper = mount(AppShell, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mountWithNaive(AppShell, { global: { plugins: [router] } })
     return { wrapper, router, session }
   }
 

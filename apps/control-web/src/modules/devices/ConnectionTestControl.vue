@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElButton, ElTag } from 'element-plus'
+import { NButton, NTag } from 'naive-ui'
 import { computed, onBeforeUnmount, ref } from 'vue'
 
 import {
@@ -19,7 +19,7 @@ const KNOWN_FAILURE_CODES = new Set([
   'COMMAND_TARGET_DEACTIVATED',
 ])
 
-type TagType = 'success' | 'danger' | 'warning' | 'info'
+type TagType = 'success' | 'error' | 'warning' | 'info'
 
 const props = withDefaults(
   defineProps<{
@@ -211,7 +211,7 @@ function presentCommand(value: PendingCommandView | null): {
     case 'failed':
       return {
         label: value.result === 'unreachable' ? '连接测试失败' : '连接测试结束，但结果未知',
-        tag: 'danger',
+        tag: 'error',
         detail: value.result_detail ?? '',
       }
     case 'rejected':
@@ -237,7 +237,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="connection-test">
-    <ElButton
+    <NButton
       v-if="props.showButton"
       type="primary"
       plain
@@ -246,7 +246,7 @@ onBeforeUnmount(() => {
       @click="pollingStopped ? retryPolling() : startTest()"
     >
       {{ buttonLabel }}
-    </ElButton>
+    </NButton>
 
     <p v-if="submissionFailure" class="connection-test__failure" role="alert">
       {{ submissionFailure }}
@@ -255,7 +255,7 @@ onBeforeUnmount(() => {
 
     <div v-else-if="command" class="connection-test__result">
       <p class="connection-test__status" role="status" aria-live="polite">
-        <ElTag :type="presentation.tag" disable-transitions>{{ presentation.label }}</ElTag>
+        <NTag :type="presentation.tag" disable-transitions>{{ presentation.label }}</NTag>
       </p>
       <p v-if="presentation.detail" class="connection-test__detail">
         {{ presentation.detail }}
@@ -297,13 +297,13 @@ onBeforeUnmount(() => {
 .connection-test__detail,
 .connection-test__code,
 .connection-test__hint {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
   font-size: 0.8rem;
   white-space: normal;
 }
 
 .connection-test__failure {
-  color: var(--el-color-danger);
+  color: var(--color-danger);
   font-size: 0.8rem;
   white-space: normal;
 }

@@ -10,14 +10,15 @@
  * itself is covered by `controlPlane.spec.ts` against a stubbed `fetch`.
  */
 
-import ElementPlus from 'element-plus'
+import { NTab } from 'naive-ui'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 
 import { ControlPlaneError } from '@/api/controlPlane'
 import AccessView from '@/modules/access/AccessView.vue'
 import { useSessionStore } from '@/session/store'
+import { mountWithNaive } from '../support/naive'
 
 const api = vi.hoisted(() => ({
   readUsers: vi.fn(),
@@ -91,7 +92,7 @@ async function mountAs(...permissions: string[]) {
   // The page re-reads the caller's identity after every change it makes; the mock reports the
   // same signed-in state so a refresh never silently strips the session under test.
   api.readSession.mockResolvedValue({ ...session.current })
-  const wrapper = mount(AccessView, { global: { plugins: [ElementPlus] } })
+  const wrapper = mountWithNaive(AccessView)
   await flushPromises()
   return wrapper
 }
@@ -172,14 +173,14 @@ describe('what the screen offers', () => {
     const wrapper = await mountAs('auth.role.view')
 
     expect(wrapper.text()).not.toContain('您没有查看账户的权限')
-    expect(wrapper.findAll('.el-tabs__item').map((tab) => tab.text())).toEqual(['角色'])
+    expect(wrapper.findAllComponents(NTab).map((tab) => tab.text())).toEqual(['角色'])
     expect(api.readUsers).not.toHaveBeenCalled()
   })
 
   it('omits the roles tab from a caller who may not read roles', async () => {
     const wrapper = await mountAs('auth.user.view')
 
-    expect(wrapper.findAll('.el-tabs__item').map((tab) => tab.text())).toEqual(['账户'])
+    expect(wrapper.findAllComponents(NTab).map((tab) => tab.text())).toEqual(['账户'])
     expect(api.readRoles).not.toHaveBeenCalled()
   })
 
@@ -203,7 +204,7 @@ describe('the role form', () => {
       .trigger('click')
     await flushPromises()
 
-    const options = wrapper.findAll('.el-checkbox').map((box) => box.text())
+    const options = wrapper.findAll('[role="checkbox"]').map((box) => box.text())
     expect(options).toEqual(CATALOGUE)
   })
 
@@ -224,9 +225,9 @@ describe('the role form', () => {
     await wrapper.find('input[name="code"]').setValue('fresh')
     await wrapper.find('input[name="name"]').setValue('新角色')
     // The third option in the catalogue order asserted above: `auth.role.view`.
-    const checkbox = wrapper.findAll('.el-checkbox input')[2]
+    const checkbox = wrapper.findAll('[role="checkbox"]')[2]
     expect(checkbox).toBeDefined()
-    await checkbox!.setValue(true)
+    await checkbox!.trigger('click')
     await wrapper
       .findAll('button')
       .find((button) => button.text() === '保存')!
@@ -258,7 +259,7 @@ describe('what it reports back', () => {
     await flushPromises()
 
     expect(api.setUserStatus).toHaveBeenCalledWith('user-1', 'deactivated')
-    expect(document.body.textContent).toContain('同时下线 3 个会话')
+    expect(wrapper.text()).toContain('同时下线 3 个会话')
   })
 
   it('shows a refusal as text rather than swallowing it', async () => {

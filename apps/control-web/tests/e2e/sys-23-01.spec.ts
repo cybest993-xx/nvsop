@@ -185,8 +185,9 @@ test('SYS-23-01 — an administrator creates a role, an account, assigns it, and
   await page.getByRole('navigation', { name: '主导航' }).getByText('用户与权限').click()
   await expect(page.getByRole('heading', { name: '用户与权限' })).toBeVisible()
 
-  // A role is created from the catalogue's checkboxes.
-  await page.getByRole('tab', { name: '角色' }).click()
+  // A role is created from the catalogue's checkboxes. Naive UI's tabs carry no role=tab, so the
+  // tab is located by its bar class and its visible text.
+  await page.locator('.n-tabs-tab', { hasText: '角色' }).click()
   await page.getByRole('button', { name: '新建角色' }).click()
   await page.getByRole('dialog').getByLabel('编码').fill('dataset_manager')
   await page.getByRole('dialog').getByLabel('名称').fill('数据集管理者')
@@ -197,7 +198,7 @@ test('SYS-23-01 — an administrator creates a role, an account, assigns it, and
   await expect(page.getByRole('cell', { name: 'dataset_manager' })).toBeVisible()
 
   // An account is created; it can log in immediately and holds no roles yet.
-  await page.getByRole('tab', { name: '账户' }).click()
+  await page.locator('.n-tabs-tab', { hasText: '账户' }).click()
   await page.getByRole('button', { name: '新建账户' }).click()
   await page.getByRole('dialog').getByLabel('登录名').fill('zhao.min')
   await page.getByRole('dialog').getByLabel('姓名').fill('赵敏')
@@ -208,13 +209,14 @@ test('SYS-23-01 — an administrator creates a role, an account, assigns it, and
   // Several roles in one submission: the administrator submits the whole set.
   const row = page.getByRole('row', { name: /zhao\.min/ })
   await row.getByRole('button', { name: '分配角色' }).click()
-  // The multi-select opens from its wrapper; its options land in a body-level dropdown.
-  await page.getByRole('dialog').locator('.el-select').click()
+  // The multi-select opens by its accessible name; its options land in a body-level dropdown
+  // (role=option is set through the component's node-props, since Naive UI does not add it).
+  await page.getByRole('dialog').getByLabel('角色').click()
   await page.getByRole('option', { name: '系统管理员' }).click()
   await page.getByRole('option', { name: '数据集管理者' }).click()
   // The open dropdown overlays the dialog's own footer; toggling it closed is what a person
   // does before reaching for 保存.
-  await page.getByRole('dialog').locator('.el-select').click()
+  await page.getByRole('dialog').getByLabel('角色').click()
   await page.getByRole('dialog').getByRole('button', { name: '保存' }).click()
   await expect(page.getByRole('row', { name: /zhao\.min/ })).toContainText(
     '系统管理员、数据集管理者',

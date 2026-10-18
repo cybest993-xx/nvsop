@@ -1,11 +1,11 @@
-import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 
 import PointManagement from '@/modules/devices/PointManagement.vue'
 import { useSessionStore } from '@/session/store'
 import type { ConnectorView } from '@/api/controlPlane'
+import { mountWithNaive } from '../support/naive'
 
 const api = vi.hoisted(() => ({
   readPoints: vi.fn(),
@@ -93,7 +93,7 @@ describe('点位管理', () => {
       permissions: ['device.point.view'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
 
     expect(api.readPoints).toHaveBeenCalledOnce()
@@ -116,7 +116,7 @@ describe('点位管理', () => {
       permissions: ['device.point.edit'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
 
     expect(api.readPoints).not.toHaveBeenCalled()
@@ -135,7 +135,7 @@ describe('点位管理', () => {
       permissions: ['device.point.edit'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -170,7 +170,7 @@ describe('点位管理', () => {
       permissions: ['device.point.view', 'device.point.edit'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -204,7 +204,7 @@ describe('点位管理', () => {
       permissions: ['device.point.view', 'device.point.edit'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -227,7 +227,7 @@ describe('点位管理', () => {
       permissions: ['device.point.view', 'device.point.delete'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -250,7 +250,7 @@ describe('点位管理', () => {
       permissions: ['device.point.view'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
     await wrapper
       .findAll('button')
@@ -274,7 +274,7 @@ describe('点位管理', () => {
       permissions: ['device.point.view'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
     await wrapper.find('input[aria-label="按工位 ID 筛选"]').setValue('station-7')
     await wrapper.find('input[aria-label="按连接器 ID 筛选"]').setValue('connector-8')
@@ -302,7 +302,7 @@ describe('点位管理', () => {
       permissions: ['device.point.view'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
 
     expect(wrapper.text()).toContain('第 1 / 2 页')
@@ -336,9 +336,8 @@ describe('点位管理', () => {
       permissions: ['device.connector.view'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       props: { connectors: [CONNECTOR, measured], stations: [STATION] },
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
 
@@ -376,9 +375,8 @@ describe('点位管理', () => {
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       props: { connectors: [measured], stations: [STATION] },
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
     await wrapper
@@ -426,9 +424,8 @@ describe('点位管理', () => {
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       props: { connectors: [measured], stations: [STATION] },
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
     await wrapper
@@ -454,7 +451,7 @@ describe('点位管理', () => {
       permissions: ['device.connector.edit'],
     }
 
-    const wrapper = mount(PointManagement, { global: { plugins: [ElementPlus] } })
+    const wrapper = mountWithNaive(PointManagement)
     await flushPromises()
     await wrapper.find('input[name="known-capability-connector-id"]').setValue('connector-9')
     await wrapper.find('input[name="known-capability-revision"]').setValue('6')
@@ -493,9 +490,8 @@ describe('点位管理', () => {
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       props: { connectors: [future], stations: [STATION] },
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
 
@@ -550,9 +546,8 @@ describe('点位管理', () => {
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       props: { connectors: [measuredWithUnknowns, pushed], stations: [STATION] },
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
 
@@ -599,9 +594,8 @@ describe('点位管理', () => {
       permissions: ['device.connector.view', 'device.connector.edit'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       props: { connectors: [partialUnverified, measuredWithExtraField], stations: [STATION] },
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
 
@@ -624,9 +618,8 @@ describe('点位管理', () => {
       permissions: ['device.point.view'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       attachTo: document.body,
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
     await wrapper.find('input[name="validation-station-id"]').setValue('station-1')
@@ -666,9 +659,8 @@ describe('点位管理', () => {
       permissions: ['device.point.view'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       attachTo: document.body,
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
     await wrapper.find('input[name="validation-station-id"]').setValue('station-1')
@@ -697,9 +689,8 @@ describe('点位管理', () => {
       permissions: ['device.point.view'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       attachTo: document.body,
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
     await wrapper.find('input[name="validation-station-id"]').setValue('station-1')
@@ -728,9 +719,8 @@ describe('点位管理', () => {
       permissions: ['device.point.view'],
     }
 
-    const wrapper = mount(PointManagement, {
+    const wrapper = mountWithNaive(PointManagement, {
       attachTo: document.body,
-      global: { plugins: [ElementPlus] },
     })
     await flushPromises()
     await wrapper.find('input[name="validation-station-id"]').setValue('station-1')

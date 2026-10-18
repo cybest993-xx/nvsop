@@ -11,6 +11,7 @@
 | 按 Skills 实施、建立任务 worktree、选测试、审查、普通 PR/CI、授权合并与单任务清理 | [交付工作流](engineering/workflow.md) |
 | 新建、拆分、领取、分派或关闭 Issue，处理标签和依赖 | [Issue 管理](engineering/issues.md) |
 | 编码、复用、接口设计、拆分模块和注释 | [代码写作](engineering/coding.md) |
+| 构建、改样式或删除 Web 界面 | [前端写作](engineering/frontend.md) |
 | 改仓库布局、模块所有权或跨模块依赖 | [仓库架构](engineering/architecture.md) |
 | 新增或调整仓库本地生成/忽略状态，更新 NVIDIA 基座、生成契约、依赖与锁文件 | [仓库维护](engineering/maintenance.md) |
 | 新增、更新、合并、迁移或删除文档/agent 指令 | [文档管理](engineering/documentation.md) |

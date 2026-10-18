@@ -9,7 +9,7 @@
  * 工位/旧机/目标机在查看权限可用时从 DevicesView 已加载的工位与推理机列表选择，否则按
  * 已知 ID 填写——与设备页既有的“没有查看权限可按已知 ID 操作”一致。
  */
-import { ElButton, ElCheckbox, ElForm, ElFormItem, ElInput, ElOption, ElSelect } from 'element-plus'
+import { NButton, NCheckbox, NForm, NInput, NSelect } from 'naive-ui'
 import { computed, onMounted, ref, watch } from 'vue'
 
 import {
@@ -22,6 +22,7 @@ import {
   type InferenceHostView,
   type StationView,
 } from '@/api/controlPlane'
+import FieldRow from '@/components/FieldRow.vue'
 import { useSessionStore } from '@/session/store'
 
 const props = withDefaults(
@@ -272,98 +273,99 @@ onMounted(() => {
     <template v-if="riskReady">
       <p class="handover__warning">{{ riskStatement }}</p>
 
-      <ElForm label-position="top" @submit.prevent="submitCreate">
+      <NForm label-placement="top" @submit.prevent="submitCreate">
         <h3>建立请求（操作者第一确认）</h3>
-        <ElFormItem label="工位">
-          <ElSelect
-            v-if="stations.length"
-            v-model="createDraft.station_id"
-            aria-label="工位"
-            class="handover__select"
-          >
-            <ElOption
-              v-for="station in stations"
-              :key="station.id"
-              :label="`${station.name}（${station.code}）`"
-              :value="station.id"
+        <FieldRow label="工位">
+          <template #default="{ id, labelId }">
+            <NSelect
+              v-if="stations.length"
+              v-model:value="createDraft.station_id"
+              :aria-labelledby="labelId"
+              class="handover__select"
+              :options="
+                stations.map((station) => ({
+                  label: `${station.name}（${station.code}）`,
+                  value: station.id,
+                }))
+              "
             />
-          </ElSelect>
-          <ElInput
-            v-else
-            id="handover-station-id"
-            v-model="createDraft.station_id"
-            name="station_id"
-            autocomplete="off"
-          />
-        </ElFormItem>
-        <ElFormItem label="旧机（当前持有物理执行权的推理机）">
-          <ElSelect
-            v-if="hosts.length"
-            v-model="createDraft.from_host_id"
-            aria-label="旧机"
-            class="handover__select"
-          >
-            <ElOption v-for="host in hosts" :key="host.id" :label="host.name" :value="host.id" />
-          </ElSelect>
-          <ElInput
-            v-else
-            id="handover-from-host-id"
-            v-model="createDraft.from_host_id"
-            name="from_host_id"
-            autocomplete="off"
-          />
-        </ElFormItem>
-        <ElFormItem label="目标机（接管的推理机）">
-          <ElSelect
-            v-if="hosts.length"
-            v-model="createDraft.to_host_id"
-            aria-label="目标机"
-            class="handover__select"
-          >
-            <ElOption v-for="host in hosts" :key="host.id" :label="host.name" :value="host.id" />
-          </ElSelect>
-          <ElInput
-            v-else
-            id="handover-to-host-id"
-            v-model="createDraft.to_host_id"
-            name="to_host_id"
-            autocomplete="off"
-          />
-        </ElFormItem>
-        <ElCheckbox v-model="createAck" :disabled="!riskReady">
+            <NInput
+              v-else
+              v-model:value="createDraft.station_id"
+              :input-props="{ id, name: 'station_id', autocomplete: 'off' }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="旧机（当前持有物理执行权的推理机）">
+          <template #default="{ id, labelId }">
+            <NSelect
+              v-if="hosts.length"
+              v-model:value="createDraft.from_host_id"
+              :aria-labelledby="labelId"
+              class="handover__select"
+              :options="hosts"
+              label-field="name"
+              value-field="id"
+            />
+            <NInput
+              v-else
+              v-model:value="createDraft.from_host_id"
+              :input-props="{ id, name: 'from_host_id', autocomplete: 'off' }"
+            />
+          </template>
+        </FieldRow>
+        <FieldRow label="目标机（接管的推理机）">
+          <template #default="{ id, labelId }">
+            <NSelect
+              v-if="hosts.length"
+              v-model:value="createDraft.to_host_id"
+              :aria-labelledby="labelId"
+              class="handover__select"
+              :options="hosts"
+              label-field="name"
+              value-field="id"
+            />
+            <NInput
+              v-else
+              v-model:value="createDraft.to_host_id"
+              :input-props="{ id, name: 'to_host_id', autocomplete: 'off' }"
+            />
+          </template>
+        </FieldRow>
+        <NCheckbox v-model:checked="createAck" :disabled="!riskReady">
           我已阅读并确认上述风险，建立强制改绑请求
-        </ElCheckbox>
+        </NCheckbox>
         <div>
-          <ElButton
+          <NButton
             type="primary"
             :disabled="!createReady || creating"
             :loading="creating"
             @click="submitCreate"
           >
             建立并完成第一确认
-          </ElButton>
+          </NButton>
         </div>
-      </ElForm>
+      </NForm>
     </template>
 
-    <ElForm label-position="top" @submit.prevent="loadRecord">
+    <NForm label-placement="top" @submit.prevent="loadRecord">
       <h3>第二人确认</h3>
-      <ElFormItem label="请求 ID">
-        <ElInput
-          id="handover-request-id"
-          v-model="requestIdInput"
-          name="handover_id"
-          autocomplete="off"
-        />
-      </ElFormItem>
-      <ElButton
+      <FieldRow label="请求 ID">
+        <template #default="{ id }">
+          <NInput
+            v-model:value="requestIdInput"
+            :input-props="{ id, name: 'handover_id', autocomplete: 'off' }"
+          />
+        </template>
+      </FieldRow>
+      <NButton
         :disabled="requestIdInput.trim() === '' || reading"
         :loading="reading"
         @click="loadRecord"
       >
         读取请求
-      </ElButton>
-    </ElForm>
+      </NButton>
+    </NForm>
 
     <section v-if="record" class="handover__record" aria-label="强制改绑请求内容">
       <h3>请求 {{ record.handover_id }}</h3>
@@ -391,17 +393,17 @@ onMounted(() => {
       <p class="handover__warning">{{ record.risk_statement }}</p>
 
       <div v-if="maySecond" class="handover__confirm">
-        <ElCheckbox v-model="readAck" :disabled="!riskReady">
+        <NCheckbox v-model:checked="readAck" :disabled="!riskReady">
           我已阅读上述风险原文，确认该强制改绑请求
-        </ElCheckbox>
-        <ElButton
-          type="danger"
+        </NCheckbox>
+        <NButton
+          type="error"
           :disabled="!confirmReady || confirming"
           :loading="confirming"
           @click="submitConfirm"
         >
           完成第二确认
-        </ElButton>
+        </NButton>
       </div>
       <p v-else-if="secondConfirmed" class="handover__explain">
         该请求已完成两人确认；审批已满足，尚未切换执行权。
@@ -421,8 +423,8 @@ onMounted(() => {
 <style scoped>
 .handover {
   margin-top: 1.5rem;
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
   padding: 1rem 1.25rem;
 }
 .handover h3 {
@@ -432,9 +434,9 @@ onMounted(() => {
 .handover__warning {
   margin: 0.5rem 0;
   padding: 0.6rem 0.75rem;
-  border-left: 3px solid var(--el-color-warning);
-  background: var(--el-color-warning-light-9);
-  color: var(--el-text-color-primary);
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-warning-subtle);
+  color: var(--color-text-strong);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -452,13 +454,13 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 .handover__muted {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 .handover__explain {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 .handover__failure {
-  color: var(--el-color-danger);
+  color: var(--color-danger);
 }
 .handover__status {
   font-weight: 600;

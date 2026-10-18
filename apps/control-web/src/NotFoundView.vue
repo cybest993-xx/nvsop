@@ -36,11 +36,11 @@ import { OVERVIEW_ROUTE } from '@/router'
 
 .not-found__note {
   margin: 0;
-  color: var(--el-text-color-regular);
+  color: var(--color-text);
 }
 
 .not-found__back:focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 </style>

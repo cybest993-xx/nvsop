@@ -780,7 +780,7 @@ onUnmounted(() => {
   align-items: flex-start;
 }
 .evidence__deadline--disabled {
-  color: var(--el-text-color-disabled);
+  color: var(--color-text-disabled);
 }
 .evidence__review {
   margin-top: 0.75rem;
@@ -809,6 +809,6 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 .evidence .muted {
-  color: var(--el-text-color-secondary);
+  color: var(--color-text-muted);
 }
 </style>

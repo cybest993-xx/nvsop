@@ -14,7 +14,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "element-plus": "2.14.5",
+    "naive-ui": "2.45.3",
     "pinia": "4.0.3",
     "vue": "3.5.42",
     "vue-router": "5.3.0"

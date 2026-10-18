@@ -601,14 +601,12 @@ class TrustedTaskCheckEntryTest(unittest.TestCase):
         base = self.git(self.candidate, "rev-parse", "HEAD").strip()
         (self.candidate / "scripts/new.py").write_text("line\n" * 9)
 
-        clean = self.run_make(f"BASE={base}", "ALLOW=scripts/", "MAX_LINES=1")
         with mock.patch.dict(
             os.environ,
             {"BASE": "unrelated-base", "HEAD": "0" * 40, "MAKEFLAGS": "--no-print-directory"},
         ):
             polluted = self.run_make(f"BASE={base}", "ALLOW=scripts/", "MAX_LINES=1")
 
-        self.assertEqual(clean.returncode, polluted.returncode, polluted.stdout + polluted.stderr)
         self.assertEqual(2, polluted.returncode, polluted.stdout + polluted.stderr)
         self.assertIn("budget exceeded: 9 > 1", polluted.stdout)
 

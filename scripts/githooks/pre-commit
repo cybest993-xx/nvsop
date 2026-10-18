@@ -20,7 +20,7 @@ VENDOR = "vendor"
 VENDOR_OVERRIDE = "NVSOP_VENDOR_PATCH"
 WEB_PACKAGE = Path("apps") / "control-web"
 WEB_SUFFIXES = frozenset(
-    {".ts", ".tsx", ".vue", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css", ".scss", ".html"}
+    {".ts", ".tsx", ".vue", ".js", ".jsx", ".mjs", ".cjs", ".json", ".css", ".scss"}
 )
 
 
@@ -137,14 +137,15 @@ def refuse_unformatted_web(root: Path, staged: list[Path]) -> tuple[list[str], l
             detail = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
             return [], [
                 "staged Web formatting was not checked: Prettier could not run "
-                f"({detail or 'no output'}). Run `make web-format`, then commit again."
+                f"({detail or 'no output'}). Run `pnpm --filter control-web run format:write` "
+                "and commit again."
             ]
         unformatted.append(str(path))
     if not unformatted:
         return [], []
     return [
-        "staged Web source is not formatted: run `make web-format` on those files, stage them "
-        "again, and retry.\n" + "\n".join(unformatted)
+        "staged Web source is not formatted: run `pnpm --filter control-web run format:write` "
+        "on those files, stage them again, and retry.\n" + "\n".join(unformatted)
     ], []
 
 

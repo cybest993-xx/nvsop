@@ -59,6 +59,9 @@ class PreCommitTest(unittest.TestCase):
         source.write_text(content)
         self.git("add", "apps/control-web/src/sample.ts")
 
+    def stage_web_unstaged(self, content: str) -> None:
+        (self.root / "apps/control-web/src/sample.ts").write_text(content)
+
     def test_partial_staging_checks_index_bytes_and_preserves_worktree(self) -> None:
         source = self.root / "sample.py"
         for staged, unstaged, code in (("x=1\n", "x = 1\n", 1), ("x = 1\n", "x=1\n", 0)):
@@ -115,11 +118,19 @@ class PreCommitTest(unittest.TestCase):
         rejected = self.hook()
         self.assertEqual(1, rejected.returncode, rejected.stderr)
         self.assertIn("apps/control-web/src/sample.ts", rejected.stderr)
-        self.assertIn("make web-format", rejected.stderr)
+        self.assertIn("control-web run format:write", rejected.stderr)
 
         self.stage_web("const a = 1\n")
         accepted = self.hook()
         self.assertEqual(0, accepted.returncode, accepted.stderr)
+
+    def test_partially_staged_web_source_checks_index_bytes(self) -> None:
+        self.install_prettier("#!/bin/sh\nif grep -q 'const a=1' -; then\n  exit 1\nfi\nexit 0\n")
+        self.stage_web("const a=1\n")
+        self.stage_web_unstaged("const a = 1\n")
+        result = self.hook()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("apps/control-web/src/sample.ts", result.stderr)
 
     def test_missing_web_dependencies_report_the_unperformed_check(self) -> None:
         self.stage_web("const a=1\n")

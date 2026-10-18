@@ -228,8 +228,6 @@ class RecordingCompressionTest(unittest.TestCase):
             )
 
         checker = JudgmentBacklogChecker(provider, threshold=10, recovery_threshold=4)
-        self.assertEqual(checker.threshold, 10)
-        self.assertEqual(checker.recovery_threshold, 4)
 
         # 初始深度为 0: 无积压
         backlogged, reason = checker()
@@ -271,6 +269,16 @@ class RecordingCompressionTest(unittest.TestCase):
         backlogged, reason = checker()
         self.assertTrue(backlogged)
         self.assertIn("judgment backlog in report", reason or "")
+
+        # 未配置恢复阈值时默认取阈值的一半 (5): 深度 6 保持让路, 5 解除。
+        depths.update(observation=0, report=0, health=0)
+        default_recovery = JudgmentBacklogChecker(provider, threshold=10)
+        depths["observation"] = 10
+        self.assertTrue(default_recovery()[0])
+        depths["observation"] = 6
+        self.assertTrue(default_recovery()[0])
+        depths["observation"] = 5
+        self.assertFalse(default_recovery()[0])
 
         # 非法阈值校验
         with self.assertRaises(ValueError):
@@ -375,6 +383,8 @@ class RecordingCompressionTest(unittest.TestCase):
             self.assertEqual(worker.drain().created, 0)
             self.assertEqual(worker.status().state, "paused")
             self.assertEqual(worker.pause().requested, "pause")
+            # 让路原因在操作者暂停期间仍可读, 不被 pause 覆盖掉。
+            self.assertIn("auto-yield: test backlog", worker.status().detail or "")
 
             # 积压解除并重新采样到解除事件后仍保持操作者意图, 不自动开始编码。
             backlogged = False
@@ -387,6 +397,7 @@ class RecordingCompressionTest(unittest.TestCase):
             status = worker.status()
             self.assertEqual(status.state, "paused")
             self.assertEqual(status.requested, "pause")
+            self.assertIsNone(status.detail)
             self.assertEqual(recording_segment_generation(source), "original")
         finally:
             worker.abort()
@@ -405,6 +416,53 @@ class RecordingCompressionTest(unittest.TestCase):
         status = worker.status()
         self.assertEqual(status.state, "paused")
         self.assertEqual(status.requested, "run")
+        self.assertIn("auto-yield: judgment backlog in observation", status.detail or "")
+
+    def test_backlog_signal_without_reason_renders_generic_detail(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        worker = RecordingCompressionWorker(
+            configuration=self.configuration(),
+            interval=1.0,
+            backlog_check=lambda: (True, None),
+        )
+        self.assertEqual(worker.drain().created, 0)
+        status = worker.status()
+        self.assertEqual(status.state, "paused")
+        self.assertEqual(status.detail, "auto-yield: judgment backlog")
+
+    def test_backlog_signal_failure_keeps_the_previous_yield(self) -> None:
+        directory = self.recording / CAMERA
+        segments(directory, time() - 3 * RAW_WINDOW_SECONDS, 1)
+        outcomes: list[tuple[bool, str | None] | Exception] = [
+            (True, "judgment backlog in observation"),
+            RuntimeError("state unavailable"),
+        ]
+
+        def backlog_signal() -> tuple[bool, str | None]:
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        worker = RecordingCompressionWorker(
+            configuration=self.configuration(),
+            interval=1.0,
+            backlog_check=backlog_signal,
+        )
+        with self.assertLogs("edge_runtime", level="WARNING") as captured:
+            self.assertEqual(worker.drain().created, 0)
+            self.assertEqual(worker.drain().created, 0)
+        self.assertTrue(
+            any(
+                "edge.recording_compression.backlog_check_failed" in line
+                for line in captured.output
+            ),
+            captured.output,
+        )
+        # 采样失败保持上一轮判定: 仍然让路, 原因不被错误覆盖。
+        status = worker.status()
+        self.assertEqual(status.state, "paused")
         self.assertIn("auto-yield: judgment backlog in observation", status.detail or "")
 
     def test_abort_reaps_stopped_process_preserves_source_and_restart_resumes(self) -> None:

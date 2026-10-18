@@ -44,8 +44,11 @@ _PROVENANCE_SUFFIX = ".compressed.json"
 _ENCODER = "libx264"
 _PRESET = "veryfast"
 _FFMPEG_HEAD = ("-hide_banner", "-loglevel", "error")
-# 积压信号采样间隔: 秒级即可跟住判定积压, 又不与判定写路径争用 SQLite 锁。
+# 积压信号采样间隔: 秒级足够跟住判定积压, 把与判定写路径共用 LocalState 锁的等待压到低频。
+# 采样本身只读, 不写队列, 也不确认观测。
 _BACKLOG_POLL_SECONDS = 1.0
+# 受监控队列: 判定消费成功后确认观测, 中心投递成功后确认报告; 其余队列不反压压缩。
+_MONITORED_QUEUES = ("observation", "report")
 _FFPROBE_ARGS = (
     "-v",
     "error",
@@ -122,7 +125,7 @@ class _CompressionInterruptedError(Exception):
 class JudgmentBacklogChecker:
     """按 S030 持久队列深度与滞后恢复判定自动让路状态。
 
-    当任一受监控队列 (默认 observation 与 report) 的未确认深度达到 threshold 时触发让路;
+    受监控队列固定为 ``_MONITORED_QUEUES``: 当任一队列的未确认深度达到 threshold 时触发让路;
     只有当所有受监控队列深度均回落到 recovery_threshold 以下时才解除让路, 避免状态抖动。
     """
 
@@ -132,7 +135,6 @@ class JudgmentBacklogChecker:
         *,
         threshold: int = DEFAULT_RECORDING_COMPRESSION_BACKLOG_THRESHOLD,
         recovery_threshold: int | None = None,
-        monitored_queues: tuple[str, ...] = ("observation", "report"),
     ) -> None:
         if threshold <= 0:
             raise ValueError("backlog threshold must be a positive integer")
@@ -146,28 +148,15 @@ class JudgmentBacklogChecker:
         self._provider = provider
         self._threshold = threshold
         self._recovery_threshold = resolved_recovery
-        self._monitored_queues = monitored_queues
         self._active = False
         self._active_reason: str | None = None
-
-    @property
-    def threshold(self) -> int:
-        return self._threshold
-
-    @property
-    def recovery_threshold(self) -> int:
-        return self._recovery_threshold
-
-    @property
-    def monitored_queues(self) -> tuple[str, ...]:
-        return self._monitored_queues
 
     def __call__(self) -> tuple[bool, str | None]:
         statuses = {status.name: status for status in self._provider()}
         if self._active:
             still_backlogged = any(
                 name in statuses and statuses[name].depth > self._recovery_threshold
-                for name in self._monitored_queues
+                for name in _MONITORED_QUEUES
             )
             if not still_backlogged:
                 self._active = False
@@ -175,7 +164,7 @@ class JudgmentBacklogChecker:
                 return False, None
             return True, self._active_reason
 
-        for name in self._monitored_queues:
+        for name in _MONITORED_QUEUES:
             status = statuses.get(name)
             if status is not None and status.depth >= self._threshold:
                 self._active = True
@@ -438,9 +427,11 @@ class RecordingCompressionWorker:
                     state, detail = "busy", "another compression owner still holds the directory"
                 except OSError as error:
                     state, detail = "unavailable", f"compression ownership unreadable: {error}"
-            if detail is None and self._yielded and self._requested == "run":
-                detail = f"auto-yield: {self._yield_reason}"
-                if state in ("idle", "running"):
+            if detail is None and self._yielded and self._requested != "abort":
+                # 让路原因在操作者显式暂停时同样保留; 只有确实没有子进程在跑时才发布 paused。
+                detail = f"auto-yield: {self._yield_reason or 'judgment backlog'}"
+                yielding_run = self._requested == "run" and self._process is None
+                if yielding_run and state in ("idle", "running"):
                     state = "paused"
             return CompressionStatus(
                 state,
@@ -536,15 +527,16 @@ class RecordingCompressionWorker:
             with self._control_lock:
                 self._segment = None
                 self._ownership_fd = self._material_fd = -1
-                if self._control_error is not None:
-                    self._state = "unavailable"
-                elif self._yielded and self._requested == "run":
-                    self._state = "paused"
-                else:
-                    self._state = {"run": "idle", "pause": "paused", "abort": "aborted"}[
-                        self._requested
-                    ]
+                self._state = self._settled_state()
                 self._draining.release()
+
+    def _settled_state(self) -> str:
+        """本轮结束后发布的状态: 控制意图优先, 其次让路; 调用方持控制锁。"""
+        if self._control_error is not None:
+            return "unavailable"
+        if self._yielded and self._requested == "run":
+            return "paused"
+        return {"run": "idle", "pause": "paused", "abort": "aborted"}[self._requested]
 
     def _ready(self) -> bool:
         while True:
@@ -744,7 +736,8 @@ def _compress_segment(
     candidate = _candidate_path(segment)
     provenance = _provenance_path(segment)
     work: Path | None = None
-    # 源文件代次先取证: 原件消失或变化时 finally 必须能判断产物能否安全删除。
+    # 先取证源文件代次: stat 失败时还没有临时产物可回滚, 由调用方按 io_failed 处理;
+    # finally 也要凭它判断产物能否删除, 所以必须在 try 之前绑定。
     source_stat = segment.stat()
     try:
         work = _temporary_candidate(segment)

@@ -17,7 +17,6 @@ import {
   editInferenceHost as generatedEditInferenceHost,
   exportInferenceHostMediaConfiguration as generatedExportInferenceHostMediaConfiguration,
   listCameraMedia as generatedListCameraMedia,
-  readCameraMedia as generatedReadCameraMedia,
   readHandover as generatedReadHandover,
   readHandoverRisk as generatedReadHandoverRisk,
   createPoint as generatedCreatePoint,
@@ -120,9 +119,7 @@ import {
   validateTemplateBinding as generatedValidateTemplateBinding,
   type ActionListHistoryView,
   type CameraConfiguration,
-  type CameraMediaView,
   type CameraView,
-  type ActionListInput,
   type ArtifactAcceptedView,
   type ArtifactInput,
   type ArtifactView,
@@ -131,7 +128,6 @@ import {
   type AnnotationContextInput,
   type AnnotationContextView,
   type AnnotationHistoryView,
-  type AnnotationMode,
   type AnnotationSegmentInput as GeneratedAnnotationSegmentInput,
   type AnnotationSubmissionInput,
   type AnnotationSubmissionView,
@@ -220,9 +216,7 @@ import {
   type UsageCheckAcceptedView,
   type GlobalRetentionPolicyView,
   type RetentionImpactEstimateView,
-  type RetentionPolicyMode,
   type RetentionPolicyView,
-  type RetentionRuleView,
   type StationRetentionUpdate,
   type StationRetentionView,
   type UsageCheckInput,
@@ -555,7 +549,6 @@ export function cancelEvidenceReview(
 
 /** 一条再切片请求；状态由服务器拥有，中心只登记并委托来源推理机。 */
 export type EvidenceReclip = EvidenceReclipRecord
-export type EvidenceReclipInput = EvidenceReclipBody
 
 /** 登记一次再切片请求；锚点与来源主机由证据事实派生，调用方按同一 `request_id` 安全重放。 */
 export function createEvidenceReclipRequest(
@@ -820,10 +813,8 @@ export function readJob(jobId: string): Promise<DatasetJob> {
   return execute(generatedReadJob({ path: { job_id: jobId } }))
 }
 
-export type DatasetAnnotationMode = AnnotationMode
 export type DatasetActionList = ActionListView
 export type DatasetActionListHistory = ActionListHistoryView
-export type DatasetActionListInput = ActionListInput
 
 export function registerDatasetActionList(
   datasetId: string,
@@ -1163,10 +1154,6 @@ export function readCameraMedia(page = 1, pageSize = 50): Promise<ItemPageCamera
   return execute(generatedListCameraMedia({ query: { page, page_size: pageSize } }))
 }
 
-export function readCameraMediaDetail(cameraId: string): Promise<CameraMediaView> {
-  return execute(generatedReadCameraMedia({ path: { camera_id: cameraId } }))
-}
-
 export function readConnector(connectorId: string): Promise<ConnectorView> {
   return execute(generatedReadConnector({ path: { connector_id: connectorId } }))
 }
@@ -1496,12 +1483,8 @@ export function deleteRole(roleId: string): Promise<void> {
 
 // ——— 保留策略：全局默认与工位整组覆盖都走生成客户端。 ———
 
-export type RetentionRuleInput = RetentionRuleView
-export type RetentionPolicyInput = RetentionPolicyView
-export type RetentionPolicyModeInput = RetentionPolicyMode
 export type GlobalRetentionPolicy = GlobalRetentionPolicyView
 export type StationRetention = StationRetentionView
-export type StationRetentionInput = StationRetentionUpdate
 export type RetentionImpact = RetentionImpactEstimateView
 
 /** 读取全局默认保留组；尚未持久化时中心返回代码默认值与 revision 0。 */

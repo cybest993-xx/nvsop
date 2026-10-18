@@ -113,5 +113,8 @@ Some of the above is enforced by machines; the rest is enforced by review, and t
 | Every form control has an accessible name | Integration test |
 | The document does not scroll; nothing overflows horizontally | Playwright, both viewports |
 | Text contrast reaches AA | Playwright with axe-core |
+| Staged Web source is Prettier-formatted | `pre-commit`, `make web-format`, CI |
 
 Three rules cannot be mechanised and are the reviewer's: whether a colour is carrying meaning rather than decorating, whether a type step's value suits the text it sets, and whether a shared component's two callers are real. They are listed here so that "no machine complained" is never mistaken for "this was checked".
+
+The `pre-commit` hook checks staged Web files only when that worktree has Web dependencies (`make web-install`); `make web-format`, `make check` and CI check them either way, so a hook that reports the check as unperformed is a gap to close, not a pass.
